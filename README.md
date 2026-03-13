@@ -43,27 +43,50 @@ An automated mailing bot that personalized cold emails for job/internship applic
 
 ---
 
-## 📦 Setup & Usage
+## 📦 Setup from Scratch
 
-### 1. Installation
+### Prerequisites
+1. **Node.js**: Make sure you have Node.js installed (v16 or higher recommended).
+2. **Gmail App Password**: 
+   - You cannot use your regular Gmail password. 
+   - Go to your Google Account Strategy -> Security -> 2-Step Verification.
+   - Scroll to the bottom and create an **App Password** (name it something like "Mailer Bot").
+
+### Step 1: Clone & Install
 ```bash
+git clone <repository-url>
+cd Mailer
 npm install
 ```
 
-### 2. Environment Configuration
-Create a `.env` file based on `.env_example.txt`:
-- `EMAIL_USER`: Your Gmail address.
-- `EMAIL_PASS`: Your Gmail App Password.
-- `OPENROUTER_API_KEY`: Your API key from [OpenRouter](https://openrouter.ai/).
-- `OPENROUTER_MODEL`: Preferred model (e.g., `google/gemini-2.5-flash` or `anthropic/claude-3.5-sonnet`).
+### Step 2: Environment Configuration
+1. Copy the example `.env` file:
+   ```bash
+   cp .env.example .env
+   ```
+2. Open the `.env` file and fill in your details:
+   - `EMAIL_USER`: Your Gmail address (e.g., `you@gmail.com`).
+   - `EMAIL_PASS`: The 16-character **App Password** you generated earlier.
+   - `OPENROUTER_API_KEY`: Get this for free at [OpenRouter](https://openrouter.ai/).
+   - `OPENROUTER_MODEL`: Set your primary AI model (e.g., `meta-llama/llama-3.3-70b-instruct:free`).
+   - `OPENROUTER_FALLBACK_MODELS`: Comma-separated list of backup models if the primary gets rate-limited (e.g., `meta-llama/llama-3.3-8b-instruct:free`).
+   - *Optional:* Adjust `DAILY_LIMIT`, `DELAY_MIN`, and `DELAY_MAX`.
 
-### 3. Assets
-- Place your `hr.xlsx` in the root (ensure it has columns: `Company`, `Email`, `Name`).
-- Place your `resume.pdf` in the root.
+### Step 3: Add Your Data
+1. **The Excel File (`hr.xlsx`)**: 
+   - Place a file named `hr.xlsx` in the root folder.
+   - Ensure the first row has headers. It **must** include an `Email` column and a `Company` column.
+2. **The Resume (`resume.pdf`)**: 
+   - Place your resume as a PDF file named `resume.pdf` in the root folder. This is read by the AI to customize the emails.
 
-### 4. Running
+### Step 4: Run the Bot
 ```bash
-node index.js
+npm start
 ```
 
-The script will track progress in `progress.json` and respect your `DAILY_LIMIT`.
+### How it Works
+- The script checks `progress.json` to see where it left off.
+- It will process up to `DAILY_LIMIT` lines from your Excel file.
+- For each row, it generates a custom email, finds extra HR emails, and sends the email using your Gmail account.
+- It waits for a random time (between `DELAY_MIN` and `DELAY_MAX`) between sending each email to avoid being flagged as spam.
+- 🛑 **When the daily limit is reached**, the bot stops. Run it again the next day to continue down the list!
