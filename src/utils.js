@@ -1,8 +1,10 @@
 const fs = require('fs');
 
+const { DELAY_MIN, DELAY_MAX } = require('./config');
+
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
-const randomDelay = (min, max) =>
+const randomDelay = (min = DELAY_MIN, max = DELAY_MAX) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
 const loadProgress = (progressFile) => {

@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const ExcelJS = require('exceljs');
-const pdfParse = require('pdf-parse');
+const pdf = require('pdf-parse');
 
 const { DAILY_LIMIT, PROGRESS_FILE, RESUME_PATH, DATA_FILE } = require('./src/config');
 const { delay, randomDelay, loadProgress, saveProgress } = require('./src/utils');
@@ -16,7 +16,7 @@ async function startMailing() {
   let resumeText = "";
   try {
       const dataBuffer = fs.readFileSync(RESUME_PATH);
-      const data = await pdfParse(dataBuffer);
+      const data = await pdf(dataBuffer);
       resumeText = data.text;
       console.log("✅ Resume parsed successfully.");
   } catch(e) {
@@ -31,14 +31,46 @@ async function startMailing() {
   const worksheet = workbook.getWorksheet(1);
   const rows = [];
   
+  // Helper: extract plain text from ExcelJS cell value (handles rich text, hyperlinks, etc.)
+  const getCellText = (val) => {
+    if (val == null) return '';
+    if (typeof val === 'string') return val.trim();
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+    if (val.richText) return val.richText.map(r => r.text || '').join('').trim();
+    if (val.text != null) return getCellText(val.text);   // hyperlink — recurse in case text is also an object
+    if (val.result != null) return getCellText(val.result); // formula
+    // Last resort: try to pull an email out of the JSON
+    try {
+      const json = JSON.stringify(val);
+      const match = json.match(/[\w.\-+]+@[\w.\-]+\.\w+/);
+      if (match) return match[0];
+    } catch {}
+    return '';
+  };
+
+  // Read header names
+  const headers = {};
+  worksheet.getRow(1).eachCell((cell, colNumber) => {
+    headers[colNumber] = getCellText(cell.value);
+  });
+
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return; // Skip header
     const rowData = {};
-    worksheet.getRow(1).eachCell((cell, colNumber) => {
-      rowData[cell.value] = row.getCell(colNumber).value;
-    });
+    for (const [colNumber, headerName] of Object.entries(headers)) {
+      rowData[headerName] = getCellText(row.getCell(Number(colNumber)).value);
+    }
     rows.push(rowData);
   });
+
+  // Find the actual email column name (case-insensitive)
+  const sampleRow = rows[0] || {};
+  const emailKey = Object.keys(sampleRow).find(k => k.toLowerCase() === 'email');
+  if (!emailKey) {
+    console.error('❌ No "Email" column found in Excel. Available columns:', Object.keys(sampleRow).join(', '));
+    return;
+  }
+  console.log(`📋 Found email column: "${emailKey}". Total rows: ${rows.length}`);
 
   const start = progress.lastIndex;
   const end = Math.min(start + DAILY_LIMIT, rows.length);
@@ -53,7 +85,18 @@ async function startMailing() {
 
   for (let i = 0; i < todaysList.length; i++) {
     try {
-      const sentToList = await sendMail(todaysList[i], resumeText);
+      // Normalize email key so sendMail always gets row.Email
+      const currentRow = todaysList[i];
+      if (emailKey !== 'Email') {
+        currentRow.Email = currentRow[emailKey];
+      }
+      if (!currentRow.Email) {
+        console.log(`⚠️ Skipping row ${start + i + 1}: no email found`);
+        progress.lastIndex++;
+        saveProgress(PROGRESS_FILE, progress);
+        continue;
+      }
+      const sentToList = await sendMail(currentRow, resumeText);
       console.log(`✅ Sent to ${sentToList}`);
 
       progress.lastIndex++;

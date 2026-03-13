@@ -3,7 +3,7 @@ const fs = require('fs');
 const nodemailer = require('nodemailer');
 const ExcelJS = require('exceljs');
 const OpenAI = require('openai');
-const pdfParse = require('pdf-parse');
+const pdf = require('pdf-parse');
 
 /* ================= CONFIG ================= */
 
@@ -44,7 +44,7 @@ const openai = new OpenAI({
   }
 });
 
-const MODEL = 'google/gemini-2.5-flash';
+const MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
 
 /* ================= UTILS ================= */
 
@@ -173,7 +173,7 @@ async function startMailing() {
   let resumeText = "";
   try {
       const dataBuffer = fs.readFileSync(RESUME_PATH);
-      const data = await pdfParse(dataBuffer);
+      const data = await pdf(dataBuffer);
       resumeText = data.text;
       console.log("✅ Resume parsed successfully.");
   } catch(e) {
