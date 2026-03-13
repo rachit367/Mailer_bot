@@ -1,6 +1,6 @@
 require('dotenv').config();
 const fs = require('fs');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const pdfParse = require('pdf-parse');
 
 const { DAILY_LIMIT, PROGRESS_FILE, RESUME_PATH, DATA_FILE } = require('./src/config');
@@ -26,10 +26,19 @@ async function startMailing() {
 
   let progress = loadProgress(PROGRESS_FILE);
 
-  const workbook = XLSX.readFile(DATA_FILE);
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(DATA_FILE);
+  const worksheet = workbook.getWorksheet(1);
+  const rows = [];
+  
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // Skip header
+    const rowData = {};
+    worksheet.getRow(1).eachCell((cell, colNumber) => {
+      rowData[cell.value] = row.getCell(colNumber).value;
+    });
+    rows.push(rowData);
+  });
 
   const start = progress.lastIndex;
   const end = Math.min(start + DAILY_LIMIT, rows.length);

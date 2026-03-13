@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const nodemailer = require('nodemailer');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const OpenAI = require('openai');
 const pdfParse = require('pdf-parse');
 
@@ -22,13 +22,6 @@ if (fs.existsSync(PROGRESS_FILE)) {
 } else {
   fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2));
 }
-
-/* ================= READ XLSX ================= */
-
-const workbook = XLSX.readFile('hr.xlsx');
-const sheetName = workbook.SheetNames[0];
-const sheet = workbook.Sheets[sheetName];
-const rows = XLSX.utils.sheet_to_json(sheet);
 
 /* ================= MAIL SETUP ================= */
 
@@ -188,6 +181,20 @@ async function startMailing() {
       return;
   }
 
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile('hr.xlsx');
+  const worksheet = workbook.getWorksheet(1);
+  const rows = [];
+  
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // Skip header
+    const rowData = {};
+    worksheet.getRow(1).eachCell((cell, colNumber) => {
+      rowData[cell.value] = row.getCell(colNumber).value;
+    });
+    rows.push(rowData);
+  });
 
   const start = progress.lastIndex;
   const end = Math.min(start + DAILY_LIMIT, rows.length);
