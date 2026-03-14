@@ -76,22 +76,26 @@ async function getLLMResponse(messages) {
     return null;
 }
 
-async function prepareEmailContent(row, resumeText) {
-    console.log(`🧠 Generating email for ${row.Company}...`);
+async function prepareEmailContent(row, resumeText, companyContext = '') {
+    console.log(`🧠 Generating personalized email for ${row.Company}...`);
 
     // Step 1: Get Custom Draft
     const draftPrompt = `
 You are an expert technical recruiter and job seeker.
-Write a cold email applying for a software engineering/backend internship at ${row.Company}.
-Here is my resume data for context:
----
+Write a SHORT, cold email applying for a software engineering/backend internship at ${row.Company}.
+
+My Resume Context:
 ${resumeText}
----
+
+Company Context (Mission/Values):
+${companyContext || 'Not available'}
+
 Rules:
-1. Tailor the email very specifically to ${row.Company}'s industry.
-2. DO NOT include ANY placeholders like [Link] or [LinkedIn] or [Company Name]. If you don't have the exact link or data from the resume, completely omit that line or sentence. The email must be fully ready to send without edits.
-3. Be professional, concise, and compelling.
-4. Output MUST be valid JSON with two keys: "subject" and "body".
+1. KEEP IT SHORT (max 3-4 concise paragraphs).
+2. Tailor specifically using the Company Context if provided.
+3. DO NOT include ANY placeholders.
+4. Output MUST be valid JSON with: "subject" and "body".
+5. Mention you're applying for an internship.
 `;
 
     const draftResponse = await getLLMResponse([

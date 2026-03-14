@@ -1,39 +1,34 @@
 const { transporter, RESUME_PATH } = require('./config');
 const { prepareEmailContent } = require('./llmService');
-const { findCareerEmails } = require('./emailScraper');
+const { findCompanyInfo } = require('./emailScraper');
+const validator = require('email-validator');
 
 const sendMail = async (row, resumeText) => {
   if (!row.Email && !row.Company) return null;
 
-  // 🔍 Layer 1: Find real emails via web search/scraping
-  const scrapedEmails = row.Company ? await findCareerEmails(row.Company) : [];
+  // 🔍 Layer 1: Find real emails + domain + about context
+  const companyInfo = row.Company ? await findCompanyInfo(row.Company) : { emails: [], aboutText: '' };
 
-  // 🤖 Layer 2: Get LLM content and fallback emails
-  const llmData = await prepareEmailContent(row, resumeText);
+  // 🤖 Layer 2: Get LLM content with company context
+  const llmData = await prepareEmailContent(row, resumeText, companyInfo.aboutText);
   if (!llmData) {
       throw new Error("Failed to generate LLM content.");
   }
 
   // 📋 Layer 3: Combine Excel email + Scraped emails + LLM emails
-  // Use a Set to ensure uniqueness, cap at 5 total recipients
   const allEmails = new Set();
   
-  // Add original Excel email first (priority)
-  if (row.Email) allEmails.add(row.Email.trim().toLowerCase());
-
-  // Add scraped emails (Layer 1)
-  for (const email of scrapedEmails) {
-      if (allEmails.size < 5 && email.includes('@')) {
-          allEmails.add(email.trim().toLowerCase());
-      }
+  if (row.Email && validator.validate(row.Email.trim())) {
+      allEmails.add(row.Email.trim().toLowerCase());
   }
 
-  // Add LLM fallback emails (Layer 2)
+  for (const email of companyInfo.emails) {
+      if (allEmails.size < 5) allEmails.add(email);
+  }
+
   if (Array.isArray(llmData.additionalEmails)) {
       for (const email of llmData.additionalEmails) {
-          if (allEmails.size < 5 && email.includes('@')) {
-              allEmails.add(email.trim().toLowerCase());
-          }
+          if (allEmails.size < 5) allEmails.add(email.trim().toLowerCase());
       }
   }
 

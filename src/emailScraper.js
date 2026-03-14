@@ -1,105 +1,162 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
+const validator = require('email-validator');
+
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+    'Mozilla/5.0 (Apple) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+];
+
+function getUA() {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
 
 /**
- * Extracts email addresses from a string using regex and filters common noise
+ * Extracts and validates email addresses from text
  */
 function extractEmails(text) {
     if (!text) return [];
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const matches = text.match(emailRegex) || [];
     
-    // Ignore common non-career/false positive domains
-    const blacklistedDomains = ['duckduckgo.com', 'w3.org', 'google.com/recaptcha', 'sentry.io'];
+    const blacklistedDomains = ['duckduckgo.com', 'w3.org', 'recheck', 'sentry.io', 'google.com'];
     
     return matches.filter(email => {
         const lower = email.toLowerCase();
-        return !blacklistedDomains.some(domain => lower.includes(domain));
+        return validator.validate(email) && !blacklistedDomains.some(domain => lower.includes(domain));
     });
 }
 
 /**
- * Scrapes DuckDuckGo for potential career emails
+ * Intelligent Domain Discovery: Finds the official website URL
  */
-async function searchDDG(companyName) {
-    console.log(`🔍 Searching DuckDuckGo for ${companyName} career emails...`);
+async function findCompanyDomain(companyName) {
+    console.log(`🌐 Finding official website for ${companyName}...`);
     try {
-        // Query for specific career-related keywords
-        const query = encodeURIComponent(`"${companyName}" careers OR "hr email" OR "recruitment email"`);
+        const query = encodeURIComponent(`${companyName} official website`);
         const url = `https://html.duckduckgo.com/html/?q=${query}`;
+        const resp = await axios.get(url, { headers: { 'User-Agent': getUA() } });
+        const $ = cheerio.load(resp.data);
         
-        const response = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        // Grab the first result link that looks like a corporate site
+        // DDG results are in .result__url or .result__a
+        let domain = '';
+        $('.result__a').each((i, el) => {
+            const href = $(el).attr('href');
+            if (href && !href.includes('duckduckgo.com') && !href.includes('linkedin.com') && !href.includes('twitter.com')) {
+                const urlMatch = href.match(/^https?:\/\/([^/?#]+)(?:[/?#]|$)/i);
+                if (urlMatch) {
+                    domain = urlMatch[1].replace(/^www\./i, '');
+                    return false; // break
+                }
             }
         });
-
-        const $ = cheerio.load(response.data);
-        const pageText = $('body').text();
-        
-        // Find emails specifically containing career-related keywords
-        const allEmails = extractEmails(pageText);
-        return allEmails.filter(e => {
-            const l = e.toLowerCase();
-            return l.includes('career') || l.includes('hr') || l.includes('recruit') || l.includes('jobs') || l.includes('hiring');
-        });
-    } catch (error) {
-        console.warn(`  ⚠️ DDG search failed for ${companyName}: ${error.message}`);
-        return [];
+        return domain || (companyName.toLowerCase().replace(/\s+/g, '') + '.com');
+    } catch (e) {
+        return companyName.toLowerCase().replace(/\s+/g, '') + '.com';
     }
 }
 
 /**
- * Guesses company domain and scrapes career/contact pages
+ * Scrapes About/Mission/Home page for personalization context
  */
-async function scrapeCompanySite(companyName) {
-    // Basic domain guessing: Google -> google.com, Tech Corp -> techcorp.com
-    const domain = companyName.toLowerCase().replace(/\s+/g, '').replace(/[^\w]/g, '') + '.com';
-    const paths = ['/careers', '/jobs', '/contact', '/about-us'];
-    let allEmails = [];
-
-    console.log(`🌐 Trying to scrape ${domain}...`);
-
+async function scrapeAboutPage(domain) {
+    console.log(`🧠 Scraping About/Mission context for ${domain}...`);
+    const paths = ['/', '/about', '/about-us', '/our-mission'];
     for (const path of paths) {
         try {
             const url = `https://${domain}${path}`;
-            const response = await axios.get(url, { 
-                timeout: 5000,
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+            const resp = await axios.get(url, { timeout: 6000, headers: { 'User-Agent': getUA() } });
+            const $ = cheerio.load(resp.data);
+            
+            // Priority 1: Meta description (usually the best concise summary)
+            const metaDesc = $('meta[name="description"]').attr('content') || 
+                             $('meta[property="og:description"]').attr('content');
+            if (metaDesc && metaDesc.length > 50) return metaDesc.trim();
+
+            // Priority 2: Extract text from paragraphs
+            let context = '';
+            $('p').each((i, el) => {
+                const txt = $(el).text().trim().replace(/\s+/g, ' ');
+                if (txt.length > 80 && txt.length < 600) {
+                    const l = txt.toLowerCase();
+                    if (l.includes('mission') || l.includes('value') || l.includes('vision') || 
+                        l.includes('we are') || l.includes('platform') || l.includes('leading')) {
+                        context = txt;
+                        return false; // break
+                    }
+                }
             });
-            const $ = cheerio.load(response.data);
-            const emails = extractEmails($('body').text());
-            allEmails = allEmails.concat(emails);
+            if (context) return context;
+        } catch (e) {}
+    }
+    return '';
+}
+
+/**
+ * Scrapes DuckDuckGo for career emails
+ */
+async function searchDDG(companyName) {
+    console.log(`🔍 Searching DuckDuckGo for ${companyName} career emails...`);
+    try {
+        const query = encodeURIComponent(`"${companyName}" careers OR "hr email" OR "recruitment email"`);
+        const url = `https://html.duckduckgo.com/html/?q=${query}`;
+        const resp = await axios.get(url, { headers: { 'User-Agent': getUA() } });
+        const $ = cheerio.load(resp.data);
+        const allEmails = extractEmails($('body').text());
+        return allEmails.filter(e => {
+            const l = e.toLowerCase();
+            return l.includes('career') || l.includes('hr') || l.includes('recruit') || l.includes('jobs') || l.includes('hiring');
+        });
+    } catch (e) { return []; }
+}
+
+/**
+ * Scrapes the official site directly for emails
+ */
+async function scrapeSiteEmails(domain) {
+    const paths = ['/careers', '/jobs', '/contact', '/about-us'];
+    let allEmails = [];
+    for (const path of paths) {
+        try {
+            const url = `https://${domain}${path}`;
+            const resp = await axios.get(url, { timeout: 5000, headers: { 'User-Agent': getUA() } });
+            const $ = cheerio.load(resp.data);
+            allEmails = allEmails.concat(extractEmails($('body').text()));
             if (allEmails.length > 5) break; 
-        } catch (e) {
-            // Silently fail for individual paths
-        }
+        } catch (e) {}
     }
     return allEmails;
 }
 
 /**
- * Orchestrator: Finds career emails via multiple methods
+ * Orchestrator: Finds domain, context, and emails
  */
-async function findCareerEmails(companyName) {
+async function findCompanyInfo(companyName) {
+    const domain = await findCompanyDomain(companyName);
+    const aboutText = await scrapeAboutPage(domain);
     const ddgEmails = await searchDDG(companyName);
-    const siteEmails = await scrapeCompanySite(companyName);
+    const siteEmails = await scrapeSiteEmails(domain);
     
-    // Combine, lowercase, and deduplicate
-    const combined = [...ddgEmails, ...siteEmails]
-        .map(e => e.toLowerCase().trim())
-        .filter(e => e.includes('@'));
+    // Combine and deduplicate emails
+    const combinedEmails = Array.from(new Set([...ddgEmails, ...siteEmails].map(e => e.toLowerCase())));
 
-    // Bonus: Common patterns if nothing found
-    if (combined.length === 0) {
-        const cleanName = companyName.toLowerCase().replace(/\s+/g, '').replace(/[^\w]/g, '');
-        combined.push(`careers@${cleanName}.com`);
-        combined.push(`hr@${cleanName}.com`);
+    // Fallback patterns if none found
+    if (combinedEmails.length === 0) {
+        combinedEmails.push(`careers@${domain}`);
+        combinedEmails.push(`hr@${domain}`);
     }
 
-    return Array.from(new Set(combined));
+    return {
+        domain,
+        aboutText,
+        emails: combinedEmails
+    };
 }
 
 module.exports = {
-    findCareerEmails
+    findCompanyInfo
 };
