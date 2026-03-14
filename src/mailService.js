@@ -1,20 +1,38 @@
 const { transporter, RESUME_PATH } = require('./config');
 const { prepareEmailContent } = require('./llmService');
+const { findCareerEmails } = require('./emailScraper');
 
 const sendMail = async (row, resumeText) => {
-  if (!row.Email) return null;
+  if (!row.Email && !row.Company) return null;
 
+  // 🔍 Layer 1: Find real emails via web search/scraping
+  const scrapedEmails = row.Company ? await findCareerEmails(row.Company) : [];
+
+  // 🤖 Layer 2: Get LLM content and fallback emails
   const llmData = await prepareEmailContent(row, resumeText);
   if (!llmData) {
       throw new Error("Failed to generate LLM content.");
   }
 
-  // Combine original email with up to 4 LLM emails, ensuring uniqueness
-  const allEmails = new Set([row.Email]);
+  // 📋 Layer 3: Combine Excel email + Scraped emails + LLM emails
+  // Use a Set to ensure uniqueness, cap at 5 total recipients
+  const allEmails = new Set();
+  
+  // Add original Excel email first (priority)
+  if (row.Email) allEmails.add(row.Email.trim().toLowerCase());
+
+  // Add scraped emails (Layer 1)
+  for (const email of scrapedEmails) {
+      if (allEmails.size < 5 && email.includes('@')) {
+          allEmails.add(email.trim().toLowerCase());
+      }
+  }
+
+  // Add LLM fallback emails (Layer 2)
   if (Array.isArray(llmData.additionalEmails)) {
       for (const email of llmData.additionalEmails) {
           if (allEmails.size < 5 && email.includes('@')) {
-              allEmails.add(email.trim());
+              allEmails.add(email.trim().toLowerCase());
           }
       }
   }
