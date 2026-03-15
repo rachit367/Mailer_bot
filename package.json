@@ -1,7 +1,7 @@
 {
   "name": "mailer",
-  "version": "1.0.0",
-  "description": "",
+  "version": "2.0.0",
+  "description": "AI-powered cold email bot for job/internship outreach — supports V1 (hr.xlsx) and V2 (Recruiter Bengaluru/Delhi-NCR) datasets",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
