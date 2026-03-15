@@ -2,8 +2,10 @@
 node_modules/
 package-lock.json
 progress.json
-progress_v2.json
+
 resume.pdf
 # OS files
 .DS_Store
 Thumbs.db
+
+progress_v2.json
