@@ -26,8 +26,10 @@ const sendMail = async (row, resumeText) => {
 
   if (!email && !company) return null;
 
+  const websiteUrl = row['account/website_url'] || '';
+  
   // 🔍 Layer 1: Find real emails + domain + about context
-  const companyInfo = company ? await findCompanyInfo(company) : { emails: [], aboutText: '' };
+  const companyInfo = company ? await findCompanyInfo(company, websiteUrl) : { emails: [], aboutText: '' };
 
   // 🤖 Layer 2: LLM generates personalized email addressed to recruiter (body/subject only)
   const llmData = await prepareEmailContent(row, resumeText, companyInfo.aboutText);
@@ -77,7 +79,7 @@ const sendMail = async (row, resumeText) => {
   const toList = validatedEmails.join(', ');
 
   const mailOptions = {
-    from: `"Rachit Mittal" <${process.env.EMAIL_USER}>`,
+    from: process.env.EMAIL_USER,
     to: toList,
     subject: llmData.subject,
     text: llmData.body,

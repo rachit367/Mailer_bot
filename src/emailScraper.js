@@ -135,17 +135,22 @@ async function scrapeSiteEmails(domain) {
 /**
  * Orchestrator: Finds domain, context, and emails
  */
-async function findCompanyInfo(companyName) {
-    const domain = await findCompanyDomain(companyName);
+async function findCompanyInfo(companyName, providedUrl) {
+    let domain = '';
+    if (providedUrl) {
+        // Clean URL to get domain
+        domain = providedUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '').replace(/^www\./i, '');
+        console.log(`🌐 Using provided website: ${domain}`);
+    } else {
+        domain = await findCompanyDomain(companyName);
+    }
+    
     const aboutText = await scrapeAboutPage(domain);
     const ddgEmails = await searchDDG(companyName);
     const siteEmails = await scrapeSiteEmails(domain);
     
     // Combine and deduplicate emails
     const combinedEmails = Array.from(new Set([...ddgEmails, ...siteEmails].map(e => e.toLowerCase())));
-
-    // No fallbacks — only use emails actually found by scraping
-    // (previously fabricated careers@/hr@ causing bouncebacks)
 
     return {
         domain,

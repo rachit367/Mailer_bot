@@ -118,7 +118,7 @@ const sendMail = async (row, resumeText) => {
   const toList = Array.from(allEmails).join(', ');
 
   const mailOptions = {
-    from: `"Rachit Mittal" <${process.env.EMAIL_USER}>`,
+    from: process.env.EMAIL_USER,
     to: toList,
     subject: llmData.subject,
     text: llmData.body,
