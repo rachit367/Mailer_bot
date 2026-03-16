@@ -119,25 +119,11 @@ Rules:
 
     if (!draftResponse) return null;
 
-    // Step 2: Ask LLM for any additional verified HR/recruit emails at this company
-    const scrapePrompt = `
-Find up to 3 real, publicly known email addresses for HR, Recruiting, or Careers at ${company}.
-Do NOT hallucinate or guess. Only provide emails you know exist for a fact.
-If you are not highly confident, return an empty array.
-Output MUST be valid JSON with one key: "emails", which is an array of strings.
-`;
-
-    const scrapeResponse = await getLLMResponse([
-        { role: "system", content: "You are a specialized OSINT agent that only outputs highly verified JSON arrays of emails." },
-        { role: "user", content: scrapePrompt }
-    ]);
-
-    const additionalEmails = scrapeResponse?.emails || [];
-
+    // LLM email guessing removed — was hallucinating fake addresses
     return {
         subject: draftResponse.subject,
         body: draftResponse.body,
-        additionalEmails
+        additionalEmails: []
     };
 }
 

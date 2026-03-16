@@ -144,11 +144,8 @@ async function findCompanyInfo(companyName) {
     // Combine and deduplicate emails
     const combinedEmails = Array.from(new Set([...ddgEmails, ...siteEmails].map(e => e.toLowerCase())));
 
-    // Fallback patterns if none found
-    if (combinedEmails.length === 0) {
-        combinedEmails.push(`careers@${domain}`);
-        combinedEmails.push(`hr@${domain}`);
-    }
+    // No fallbacks — only use emails actually found by scraping
+    // (previously fabricated careers@/hr@ causing bouncebacks)
 
     return {
         domain,

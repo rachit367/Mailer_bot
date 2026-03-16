@@ -94,25 +94,10 @@ Rules:
 
     if (!draftResponse) return null;
 
-    // Step 2: Scrape HR Emails
-    const scrapePrompt = `
-Find up to 4 real, publicly known email addresses for HR, Recruiting, or Careers at ${row.Company}.
-Do NOT hallucinate or guess. Only provide emails that you know exist for a fact, such as 'careers@${row.Company.replace(/\s+/g,'').toLowerCase()}.com'.
-If you are not highly confident, return an empty array.
-Output MUST be valid JSON with one key: "emails", which is an array of strings.
-`;
-
-    const scrapeResponse = await getLLMResponse([
-        { role: "system", content: "You are a specialized OSINT agent that only outputs highly verified JSON arrays of emails." },
-        { role: "user", content: scrapePrompt }
-    ]);
-
-    const additionalEmails = scrapeResponse?.emails || [];
-
+    // LLM email guessing removed — was hallucinating fake addresses
     return {
         subject: draftResponse.subject,
-        body: draftResponse.body,
-        additionalEmails: additionalEmails
+        body: draftResponse.body
     };
 }
 
@@ -127,15 +112,8 @@ const sendMail = async (row, resumeText) => {
       throw new Error("Failed to generate LLM content.");
   }
 
-  // Combine original email with up to 4 LLM emails, ensuring uniqueness
+  // Only use the email from the Excel row — no fabricated emails
   const allEmails = new Set([row.Email]);
-  if (Array.isArray(llmData.additionalEmails)) {
-      for (const email of llmData.additionalEmails) {
-          if (allEmails.size < 5 && email.includes('@')) {
-              allEmails.add(email.trim());
-          }
-      }
-  }
 
   const toList = Array.from(allEmails).join(', ');
 

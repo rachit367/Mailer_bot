@@ -1,57 +1,80 @@
+const dns = require('dns').promises;
 const { transporter } = require('./config_v2');
 const { prepareEmailContent } = require('./llmService_v2');
 const { findCompanyInfo } = require('./emailScraper');
 const validator = require('email-validator');
 
+/**
+ * Check if an email's domain has valid MX records (can receive mail).
+ */
+async function hasValidMX(email) {
+  try {
+    const domain = email.split('@')[1];
+    if (!domain) return false;
+    const mxRecords = await dns.resolveMx(domain);
+    return mxRecords && mxRecords.length > 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 const sendMail = async (row, resumeText) => {
   const email    = row['Email Id'] || row.Email || '';
   const company  = row['Company Name'] || row.Company || 'Unknown';
   const name     = row.Name || '';
-  const resumePath = row._resumePath; // injected by index_v2.js
+  const resumePath = row._resumePath; // injected by index.js
 
   if (!email && !company) return null;
 
   // 🔍 Layer 1: Find real emails + domain + about context
   const companyInfo = company ? await findCompanyInfo(company) : { emails: [], aboutText: '' };
 
-  // 🤖 Layer 2: LLM generates personalized email addressed to recruiter
+  // 🤖 Layer 2: LLM generates personalized email addressed to recruiter (body/subject only)
   const llmData = await prepareEmailContent(row, resumeText, companyInfo.aboutText);
   if (!llmData) {
       throw new Error("Failed to generate LLM content.");
   }
 
-  // 📋 Layer 3: Combine and STRICTLY validate all emails
-  const allEmails = new Set();
+  // 📋 Layer 3: Collect and STRICTLY validate all emails
+  const candidates = new Set();
 
   const addIfValid = (e) => {
     if (!e) return;
     const clean = e.trim().toLowerCase();
-    if (validator.validate(clean)) allEmails.add(clean);
+    if (validator.validate(clean)) candidates.add(clean);
   };
 
   // 1. Excel email (Email Id column)
   addIfValid(email);
 
-  // 2. Scraped emails
+  // 2. Scraped emails (real only, no fabricated ones)
   for (const e of companyInfo.emails) {
-    if (allEmails.size >= 5) break;
+    if (candidates.size >= 5) break;
     addIfValid(e);
   }
 
-  // 3. LLM-suggested emails
-  if (Array.isArray(llmData.additionalEmails)) {
-    for (const e of llmData.additionalEmails) {
-      if (allEmails.size >= 5) break;
-      addIfValid(e);
-    }
-  }
-
-  if (allEmails.size === 0) {
+  if (candidates.size === 0) {
     console.log(`⚠️ No valid emails found for ${company}`);
     return null;
   }
 
-  const toList = Array.from(allEmails).join(', ');
+  // 🔒 Layer 4: DNS MX validation — confirm domain can receive email
+  const validatedEmails = [];
+  for (const e of candidates) {
+    const mxValid = await hasValidMX(e);
+    if (mxValid) {
+      validatedEmails.push(e);
+    } else {
+      console.log(`  🚫 Skipping ${e} — domain has no MX records (can't receive mail)`);
+    }
+  }
+
+  if (validatedEmails.length === 0) {
+    console.log(`⚠️ All emails failed MX validation for ${company}`);
+    return null;
+  }
+
+  const toList = validatedEmails.join(', ');
 
   const mailOptions = {
     from: `"Rachit Mittal" <${process.env.EMAIL_USER}>`,
@@ -71,3 +94,4 @@ const sendMail = async (row, resumeText) => {
 };
 
 module.exports = { sendMail };
+
