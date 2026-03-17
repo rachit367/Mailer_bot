@@ -82,7 +82,7 @@ async function prepareEmailContent(row, resumeText, companyContext = '') {
     // Step 1: Get Custom Draft
     const draftPrompt = `
 You are an expert technical recruiter and job seeker.
-Write a SHORT, cold email applying for a software engineering/backend internship at ${row.Company}.
+Write a SHORT, highly tailored cold email applying for an appropriate role at ${row.Company}.
 
 My Resume Context:
 ${resumeText}
@@ -91,11 +91,12 @@ Company Context (Mission/Values):
 ${companyContext || 'Not available'}
 
 Rules:
-1. KEEP IT SHORT (max 3-4 concise paragraphs).
-2. Tailor specifically using the Company Context if provided.
-3. DO NOT include ANY placeholders.
-4. Output MUST be valid JSON with: "subject" and "body".
-5. Mention you're applying for an internship.
+1. Analyze my resume to determine my core skills, experience level, and the most logical role I would be applying for.
+2. KEEP IT SHORT (max 3-4 concise paragraphs).
+3. Tailor the application specifically to the role derived from the resume and the Company Context if provided.
+4. DO NOT include ANY placeholders like [Link] or [Your Name].
+5. Sign the email with my name as found in the resume.
+6. Output MUST be valid JSON with two keys: "subject" and "body".
 `;
 
     const draftResponse = await getLLMResponse([

@@ -4,19 +4,7 @@ const { prepareEmailContent } = require('./llmService_v2');
 const { findCompanyInfo } = require('./emailScraper');
 const validator = require('email-validator');
 
-/**
- * Check if an email's domain has valid MX records (can receive mail).
- */
-async function hasValidMX(email) {
-  try {
-    const domain = email.split('@')[1];
-    if (!domain) return false;
-    const mxRecords = await dns.resolveMx(domain);
-    return mxRecords && mxRecords.length > 0;
-  } catch (e) {
-    return false;
-  }
-}
+const { validateEmailReputation } = require('./validation');
 
 const sendMail = async (row, resumeText) => {
   const email    = row['Email Id'] || row.Email || '';
@@ -60,14 +48,17 @@ const sendMail = async (row, resumeText) => {
     return null;
   }
 
-  // 🔒 Layer 4: DNS MX validation — confirm domain can receive email
+  // 🔒 Layer 4: Advanced validation & Reputation check
   const validatedEmails = [];
   for (const e of candidates) {
-    const mxValid = await hasValidMX(e);
-    if (mxValid) {
+    const rep = await validateEmailReputation(e);
+    if (rep.isValid) {
+      if (!rep.isHighQuality) {
+        console.log(`  ⚠ Note: ${e} is ${rep.reason}. Sending anyway.`);
+      }
       validatedEmails.push(e);
     } else {
-      console.log(`  🚫 Skipping ${e} — domain has no MX records (can't receive mail)`);
+      console.log(`  🚫 Skipping ${e} — ${rep.reason}`);
     }
   }
 

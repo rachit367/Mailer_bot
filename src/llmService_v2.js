@@ -88,7 +88,7 @@ async function prepareEmailContent(row, resumeText, companyContext = '') {
 
     // Step 1: Personalised cold email addressed to the named recruiter
     const draftPrompt = `
-You are an expert job seeker writing a SHORT personalized cold email.
+You are an expert job seeker writing a SHORT, highly tailored cold email.
 
 Recipient Details:
 - Name: ${recruiterName}
@@ -104,12 +104,14 @@ Company Context (Mission/Values):
 ${companyContext || 'Not available'}
 
 Rules:
-1. Open with "Hi ${recruiterName.split(' ')[0]}," — address them directly.
-2. Keep the email SHORT (max 3-4 concise paragraphs).
-3. Mention you are applying for a software engineering / backend internship.
-4. Reference the company's location (${location}) naturally if possible.
-5. DO NOT include ANY placeholders like [Link] or [Your Name].
-6. Output MUST be valid JSON with two keys: "subject" and "body".
+1. Analyze my resume to determine my core skills, experience level, and the most logical role I would be applying for.
+2. Open with "Hi ${recruiterName.split(' ')[0]}," — address them directly.
+3. Keep the email SHORT (max 3-4 concise paragraphs).
+4. Tailor the application specifically to the role derived from the resume and the Company Context if provided.
+5. Reference the company's location (${location}) naturally if possible.
+6. DO NOT include ANY placeholders like [Link] or [Your Name].
+7. Sign the email with my name as found in the resume.
+8. Output MUST be valid JSON with two keys: "subject" and "body".
 `;
 
     const draftResponse = await getLLMResponse([
