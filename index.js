@@ -178,7 +178,7 @@ async function main() {
   let progress = loadProgress(PROGRESS_FILE);
   let currentIndex = progress.lastIndex;
   let successfulSends = 0;
-  const SUCCESS_TARGET = 10;
+  const SUCCESS_TARGET = parseInt(process.env.DAILY_LIMIT, 10) || 10;
 
   console.log(`\n📧 Starting V${version} mailing. Target: ${SUCCESS_TARGET} successful sends.\n`);
 
