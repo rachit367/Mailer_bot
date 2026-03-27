@@ -66,6 +66,32 @@ async function loadV1Rows() {
   return rows;
 }
 
+/* ─── load V3 rows from HR_Lists.xlsx (single sheet) ─────── */
+async function loadV3Rows() {
+  const { DATA_FILE_V3 } = require('./src/config_v3');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(DATA_FILE_V3);
+  const worksheet = workbook.getWorksheet(1);
+  const rows = [];
+
+  const headers = {};
+  worksheet.getRow(1).eachCell((cell, col) => {
+    headers[col] = getCellText(cell.value);
+  });
+
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const rowData = {};
+    for (const [col, name] of Object.entries(headers)) {
+      rowData[name] = getCellText(row.getCell(Number(col)).value);
+    }
+    if (rowData['Email']) rows.push(rowData);
+  });
+
+  console.log(`  📄 Sheet "${worksheet.name}": ${rows.length} rows loaded`);
+  return rows;
+}
+
 /* ─── load V2 rows from recruiter Excel (2 sheets) ──────── */
 async function loadV2Rows() {
   const { DATA_FILE_V2 } = require('./src/config_v2');
@@ -114,9 +140,10 @@ async function main() {
   /* ── 1. Choose version ── */
   console.log('Select version:');
   console.log('  [1] V1 — hr.xlsx (generic HR contacts)');
-  console.log('  [2] V2 — Recruiter Email Bengaluru/Delhi-NCR (named recruiters)\n');
-  const versionInput = (await ask(rl, 'Enter 1 or 2: ')).trim();
-  const version = versionInput === '2' ? 2 : 1;
+  console.log('  [2] V2 — Recruiter Email Bengaluru/Delhi-NCR (named recruiters)');
+  console.log('  [3] V3 — HR_Lists.xlsx (named recruiters, template-guided emails)\n');
+  const versionInput = (await ask(rl, 'Enter 1, 2, or 3: ')).trim();
+  const version = versionInput === '2' ? 2 : versionInput === '3' ? 3 : 1;
   console.log(`\n✅ Selected: V${version}\n`);
 
   /* ── 2. Choose PDF ── */
@@ -164,14 +191,20 @@ async function main() {
     sendMail = require('./src/mailService').sendMail;
     rows = await loadV1Rows();
     console.log(`📋 V1: ${rows.length} rows loaded from hr.xlsx`);
-  } else {
+  } else if (version === 2) {
     const { PROGRESS_FILE_V2: PF } = require('./src/config_v2');
     PROGRESS_FILE = PF;
-    // Inject resume path into each row so mailService_v2 can use it
     rows = await loadV2Rows();
     rows.forEach(r => { r._resumePath = resumePath; });
     sendMail = require('./src/mailService_v2').sendMail;
     console.log(`\n📋 V2: ${rows.length} total rows loaded across all sheets`);
+  } else {
+    const { PROGRESS_FILE_V3: PF } = require('./src/config_v3');
+    PROGRESS_FILE = PF;
+    rows = await loadV3Rows();
+    rows.forEach(r => { r._resumePath = resumePath; });
+    sendMail = require('./src/mailService_v3').sendMail;
+    console.log(`\n📋 V3: ${rows.length} rows loaded from HR_Lists.xlsx`);
   }
 
   /* ── 5. Progress ── */
@@ -187,7 +220,7 @@ async function main() {
     try {
       const currentRow = rows[currentIndex];
       const label = currentRow['Company Name'] || currentRow.Company || 'Unknown';
-      const nameLabel = version === 2 ? ` → ${currentRow.Name || ''}` : '';
+      const nameLabel = (version === 2 || version === 3) ? ` → ${currentRow.Name || ''}` : '';
 
       console.log(`[${successfulSends + 1}/${SUCCESS_TARGET}] Row ${currentIndex + 1}: ${label}${nameLabel} ...`);
 
