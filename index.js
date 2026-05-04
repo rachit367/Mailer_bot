@@ -1,15 +1,15 @@
 require('dotenv').config();
 const fs = require('fs');
-const path = require('path');
 const readline = require('readline');
 const ExcelJS = require('exceljs');
 const pdf = require('pdf-parse');
 
-/* ─── helpers ─────────────────────────────────────────────── */
+const { delay, randomDelay, loadProgress, saveProgress } = require('./src/utils');
+const { DATA_FILE, PROGRESS_FILE } = require('./src/config');
+const { sendMail } = require('./src/mailService');
+
 const ask = (rl, question) =>
   new Promise(resolve => rl.question(question, resolve));
-
-const { delay, randomDelay, loadProgress, saveProgress } = require('./src/utils');
 
 /* ─── cell text extractor (handles rich text / hyperlinks) ── */
 const getCellText = (val) => {
@@ -19,6 +19,7 @@ const getCellText = (val) => {
   if (val.richText) return val.richText.map(r => r.text || '').join('').trim();
   if (val.text != null) return getCellText(val.text);
   if (val.result != null) return getCellText(val.result);
+  if (val.hyperlink) return val.hyperlink;
   try {
     const json = JSON.stringify(val);
     const match = json.match(/[\w.\-+]+@[\w.\-]+\.\w+/);
@@ -27,50 +28,18 @@ const getCellText = (val) => {
   return '';
 };
 
-/* ─── list PDFs in project root ─────────────────────────────── */
 function listPDFs() {
   return fs.readdirSync('.').filter(f => f.toLowerCase().endsWith('.pdf'));
 }
 
-/* ─── load V1 rows from hr.xlsx ──────────────────────────── */
-async function loadV1Rows() {
-  const { DATA_FILE } = require('./src/config');
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(DATA_FILE);
-  const worksheet = workbook.getWorksheet(1);
-  const rows = [];
-
-  const headers = {};
-  worksheet.getRow(1).eachCell((cell, col) => {
-    headers[col] = getCellText(cell.value);
-  });
-
-  worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
-    const rowData = {};
-    for (const [col, name] of Object.entries(headers)) {
-      rowData[name] = getCellText(row.getCell(Number(col)).value);
-    }
-    rows.push(rowData);
-  });
-
-  // Normalise email column name
-  const sampleRow = rows[0] || {};
-  const emailKey = Object.keys(sampleRow).find(k => k.toLowerCase() === 'email');
-  if (!emailKey) {
-    console.error('❌ No "Email" column found in hr.xlsx. Columns:', Object.keys(sampleRow).join(', '));
+async function loadRows() {
+  if (!fs.existsSync(DATA_FILE)) {
+    console.error(`❌ Data file "${DATA_FILE}" not found in project root.`);
     process.exit(1);
   }
-  if (emailKey !== 'Email') rows.forEach(r => { r.Email = r[emailKey]; });
 
-  return rows;
-}
-
-/* ─── load V3 rows from HR_Lists.xlsx (single sheet) ─────── */
-async function loadV3Rows() {
-  const { DATA_FILE_V3 } = require('./src/config_v3');
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(DATA_FILE_V3);
+  await workbook.xlsx.readFile(DATA_FILE);
   const worksheet = workbook.getWorksheet(1);
   const rows = [];
 
@@ -92,61 +61,23 @@ async function loadV3Rows() {
   return rows;
 }
 
-/* ─── load V2 rows from recruiter Excel (2 sheets) ──────── */
-async function loadV2Rows() {
-  const { DATA_FILE_V2 } = require('./src/config_v2');
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(DATA_FILE_V2);
-
-  const allRows = [];
-
-  workbook.eachSheet((worksheet, sheetId) => {
-    const headers = {};
-    worksheet.getRow(1).eachCell((cell, col) => {
-      headers[col] = getCellText(cell.value);
-    });
-
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      const rowData = {};
-      for (const [col, name] of Object.entries(headers)) {
-        rowData[name] = getCellText(row.getCell(Number(col)).value);
-      }
-      // Only add rows that have at least an email
-      if (rowData['Email Id'] || rowData['Email']) {
-        allRows.push(rowData);
-      }
-    });
-
-    console.log(`  📄 Sheet "${worksheet.name}": ${worksheet.rowCount - 1} rows loaded`);
-  });
-
-  return allRows;
-}
-
-/* ─── MAIN ──────────────────────────────────────────────── */
 async function main() {
   console.log('\n╔══════════════════════════════╗');
-  console.log('║       MAILER BOT LAUNCHER    ║');
+  console.log('║       MAILER BOT             ║');
   console.log('╚══════════════════════════════╝\n');
 
   if (!process.env.OPENROUTER_API_KEY) {
     console.error('❌ OPENROUTER_API_KEY is missing from .env');
     process.exit(1);
   }
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.error('❌ EMAIL_USER / EMAIL_PASS missing from .env');
+    process.exit(1);
+  }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-  /* ── 1. Choose version ── */
-  console.log('Select version:');
-  console.log('  [1] V1 — hr.xlsx (generic HR contacts)');
-  console.log('  [2] V2 — Recruiter Email Bengaluru/Delhi-NCR (named recruiters)');
-  console.log('  [3] V3 — HR_Lists.xlsx (named recruiters, template-guided emails)\n');
-  const versionInput = (await ask(rl, 'Enter 1, 2, or 3: ')).trim();
-  const version = versionInput === '2' ? 2 : versionInput === '3' ? 3 : 1;
-  console.log(`\n✅ Selected: V${version}\n`);
-
-  /* ── 2. Choose PDF ── */
+  /* ── Choose PDF ── */
   const pdfs = listPDFs();
   if (pdfs.length === 0) {
     console.error('❌ No PDF files found in project root. Add at least one resume PDF.');
@@ -170,7 +101,7 @@ async function main() {
   rl.close();
   console.log(`\n✅ Using resume: ${resumePath}\n`);
 
-  /* ── 3. Parse PDF ── */
+  /* ── Parse PDF ── */
   let resumeText = '';
   try {
     const buf = fs.readFileSync(resumePath);
@@ -182,51 +113,27 @@ async function main() {
     process.exit(1);
   }
 
-  /* ── 4. Load rows & config ── */
-  let rows, PROGRESS_FILE, sendMail;
+  /* ── Load rows ── */
+  const rows = await loadRows();
+  rows.forEach(r => { r._resumePath = resumePath; });
+  console.log(`📋 ${rows.length} rows loaded from ${DATA_FILE}\n`);
 
-  if (version === 1) {
-    const { PROGRESS_FILE: PF } = require('./src/config');
-    PROGRESS_FILE = PF;
-    sendMail = require('./src/mailService').sendMail;
-    rows = await loadV1Rows();
-    console.log(`📋 V1: ${rows.length} rows loaded from hr.xlsx`);
-  } else if (version === 2) {
-    const { PROGRESS_FILE_V2: PF } = require('./src/config_v2');
-    PROGRESS_FILE = PF;
-    rows = await loadV2Rows();
-    rows.forEach(r => { r._resumePath = resumePath; });
-    sendMail = require('./src/mailService_v2').sendMail;
-    console.log(`\n📋 V2: ${rows.length} total rows loaded across all sheets`);
-  } else {
-    const { PROGRESS_FILE_V3: PF } = require('./src/config_v3');
-    PROGRESS_FILE = PF;
-    rows = await loadV3Rows();
-    rows.forEach(r => { r._resumePath = resumePath; });
-    sendMail = require('./src/mailService_v3').sendMail;
-    console.log(`\n📋 V3: ${rows.length} rows loaded from HR_Lists.xlsx`);
-  }
-
-  /* ── 5. Progress ── */
+  /* ── Progress ── */
   let progress = loadProgress(PROGRESS_FILE);
   let currentIndex = progress.lastIndex;
   let successfulSends = 0;
   const SUCCESS_TARGET = parseInt(process.env.DAILY_LIMIT, 10) || 10;
 
-  console.log(`\n📧 Starting V${version} mailing. Target: ${SUCCESS_TARGET} successful sends.\n`);
+  console.log(`📧 Starting mailer. Target: ${SUCCESS_TARGET} successful sends.\n`);
 
-  /* ── 6. Mailing loop ── */
+  /* ── Mailing loop ── */
   while (successfulSends < SUCCESS_TARGET && currentIndex < rows.length) {
     try {
       const currentRow = rows[currentIndex];
-      const label = currentRow['Company Name'] || currentRow.Company || 'Unknown';
-      const nameLabel = (version === 2 || version === 3) ? ` → ${currentRow.Name || ''}` : '';
+      const company = currentRow.Company || currentRow['Company Name'] || 'Unknown';
+      const name = currentRow.Name || '';
 
-      console.log(`[${successfulSends + 1}/${SUCCESS_TARGET}] Row ${currentIndex + 1}: ${label}${nameLabel} ...`);
-
-      // For V1, pass resumePath via a different mechanism (config already has RESUME_PATH,
-      // but to support custom PDF we patch it here at row level)
-      if (version === 1) currentRow._resumePath = resumePath;
+      console.log(`[${successfulSends + 1}/${SUCCESS_TARGET}] Row ${currentIndex + 1}: ${company}${name ? ' → ' + name : ''} ...`);
 
       const sentToList = await sendMail(currentRow, resumeText);
 

@@ -19,100 +19,103 @@ const FALLBACK_MODELS = (process.env.OPENROUTER_FALLBACK_MODELS || '')
   .filter(Boolean);
 
 const MODELS = [PRIMARY_MODEL, ...FALLBACK_MODELS];
-
 const blacklistedModels = new Set();
 
 async function getLLMResponse(messages) {
-    for (let modelIdx = 0; modelIdx < MODELS.length; modelIdx++) {
-        const model = MODELS[modelIdx];
+  for (let modelIdx = 0; modelIdx < MODELS.length; modelIdx++) {
+    const model = MODELS[modelIdx];
 
-        if (blacklistedModels.has(model)) continue;
+    if (blacklistedModels.has(model)) continue;
 
-        const maxRetries = modelIdx === 0 ? 2 : 1;
+    const maxRetries = modelIdx === 0 ? 2 : 1;
 
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                const response = await openai.chat.completions.create({
-                    model,
-                    messages,
-                    response_format: { type: "json_object" }
-                });
-                const content = response.choices[0].message.content;
-                const parsed = JSON.parse(content);
-                if (modelIdx > 0) {
-                    console.log(`  ✅ Fallback model worked: ${model}`);
-                }
-                return parsed;
-            } catch (error) {
-                const status = error.status || 500;
-                const is429 = error.message?.includes('429') || status === 429;
-                const isAuthOrPayment = status === 402 || status === 404 || status === 403 || status === 401;
-
-                if (is429 && attempt < maxRetries) {
-                    const waitSec = attempt * 3;
-                    console.warn(`  ⏳ Rate limited on ${model}. Retrying in ${waitSec}s...`);
-                    await new Promise(r => setTimeout(r, waitSec * 1000));
-                    continue;
-                }
-
-                if (isAuthOrPayment) {
-                    console.error(`  🚨 ${model} is unavailable (${status}). Removing from rotation.`);
-                    blacklistedModels.add(model);
-                    break;
-                }
-
-                if (modelIdx < MODELS.length - 1) {
-                    console.warn(`  ⚠️ ${model} failed: ${error.message}. Trying fallback...`);
-                    await new Promise(r => setTimeout(r, 1500));
-                    break;
-                }
-
-                console.error(`  ❌ All models failed. Last error:`, error.message);
-                return null;
-            }
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await openai.chat.completions.create({
+          model,
+          messages,
+          response_format: { type: "json_object" }
+        });
+        const content = response.choices[0].message.content;
+        const parsed = JSON.parse(content);
+        if (modelIdx > 0) {
+          console.log(`  ✅ Fallback model worked: ${model}`);
         }
+        return parsed;
+      } catch (error) {
+        const status = error.status || 500;
+        const is429 = error.message?.includes('429') || status === 429;
+        const isAuthOrPayment = status === 402 || status === 404 || status === 403 || status === 401;
+
+        if (is429 && attempt < maxRetries) {
+          const waitSec = attempt * 3;
+          console.warn(`  ⏳ Rate limited on ${model}. Retrying in ${waitSec}s...`);
+          await new Promise(r => setTimeout(r, waitSec * 1000));
+          continue;
+        }
+
+        if (isAuthOrPayment) {
+          console.error(`  🚨 ${model} is unavailable (${status}). Removing from rotation.`);
+          blacklistedModels.add(model);
+          break;
+        }
+
+        if (modelIdx < MODELS.length - 1) {
+          console.warn(`  ⚠️ ${model} failed: ${error.message}. Trying fallback...`);
+          await new Promise(r => setTimeout(r, 1500));
+          break;
+        }
+
+        console.error(`  ❌ All models failed. Last error:`, error.message);
+        return null;
+      }
     }
-    return null;
+  }
+  return null;
 }
 
 async function prepareEmailContent(row, resumeText, companyContext = '') {
-    const company = row.Company || row['Company Name'] || 'your company';
-    console.log(`🧠 Generating template-guided email for ${company}...`);
+  const recruiterName = row.Name || 'Hiring Manager';
+  const recruiterTitle = row.Title || 'HR';
+  const company = row.Company || row['Company Name'] || 'your company';
+  const firstName = recruiterName.split(' ')[0];
 
-    const template = await loadTemplateText();
-    const userInstructions = loadUserInstructions();
+  console.log(`🧠 Generating template-guided email for ${recruiterName} (${recruiterTitle}) at ${company}...`);
 
-    // V1 has no named recipient — greet the team / hiring manager.
-    const prompt = buildTemplatePrompt({
-        template,
-        resumeText,
-        userInstructions,
-        recipient: { firstName: 'team', fullName: '', title: 'Hiring Manager' },
-        company,
-        companyContext,
-    });
+  const template = await loadTemplateText();
+  const userInstructions = loadUserInstructions();
 
-    const draftResponse = await getLLMResponse([
-        { role: "system", content: "You generate ready-to-send cold emails as JSON. The output is sent directly without human review. Follow the supplied template structure exactly and never emit placeholders or brackets." },
-        { role: "user", content: prompt }
-    ]);
+  const prompt = buildTemplatePrompt({
+    template,
+    resumeText,
+    userInstructions,
+    recipient: { firstName, fullName: recruiterName, title: recruiterTitle },
+    company,
+    companyContext,
+  });
 
-    if (!draftResponse) return null;
+  const response = await getLLMResponse([
+    {
+      role: "system",
+      content: "You generate ready-to-send cold emails as JSON. The output is sent directly without human review. Follow the supplied template structure exactly and never emit placeholders or brackets."
+    },
+    { role: "user", content: prompt }
+  ]);
 
-    const bodyMatches = detectPlaceholders(draftResponse.body);
-    const subjectMatches = detectPlaceholders(draftResponse.subject);
-    if (bodyMatches || subjectMatches) {
-        console.warn(`  ⚠️ Placeholder detected in LLM output — skipping row. Found: ${[...(bodyMatches||[]), ...(subjectMatches||[])].join(', ')}`);
-        return null;
-    }
+  if (!response) return null;
 
-    return {
-        subject: draftResponse.subject,
-        body: draftResponse.body,
-        additionalEmails: []
-    };
+  const bodyMatches = detectPlaceholders(response.body);
+  const subjectMatches = detectPlaceholders(response.subject);
+  if (bodyMatches || subjectMatches) {
+    console.warn(`  ⚠️ Placeholder detected in LLM output — skipping row. Found: ${[...(bodyMatches||[]), ...(subjectMatches||[])].join(', ')}`);
+    return null;
+  }
+
+  return {
+    subject: response.subject,
+    body: response.body,
+    additionalEmails: []
+  };
 }
 
-module.exports = {
-  prepareEmailContent
-};
+module.exports = { prepareEmailContent };

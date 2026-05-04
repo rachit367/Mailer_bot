@@ -7,8 +7,6 @@ resume.pdf
 # OS files
 .DS_Store
 Thumbs.db
-progress_v2.json
-progress_v3.json
 
 # Personal sender context — keep private
 user_instructions.md

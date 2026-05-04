@@ -1,68 +1,65 @@
 const path = require('path');
-const dns = require('dns').promises;
-const { transporter, RESUME_PATH } = require('./config');
+const validator = require('email-validator');
+const { transporter } = require('./config');
 const { prepareEmailContent } = require('./llmService');
 const { findCompanyInfo } = require('./emailScraper');
-const validator = require('email-validator');
-
 const { validateEmailReputation } = require('./validation');
 
 const sendMail = async (row, resumeText) => {
-  if (!row.Email && !row.Company) return null;
+  const email      = row.Email || '';
+  const company    = row.Company || row['Company Name'] || 'Unknown';
+  const resumePath = row._resumePath;
 
-  // Use runtime-injected resume path (from unified launcher) or fall back to config default
-  const resumePath = row._resumePath || RESUME_PATH;
+  if (!email && !company) return null;
 
-  // 🔍 Layer 1: Find real emails + domain + about context
-  const companyInfo = row.Company ? await findCompanyInfo(row.Company) : { emails: [], aboutText: '' };
+  // 🔍 Layer 1: Find domain + about context via web scrape
+  const companyInfo = company
+    ? await findCompanyInfo(company, '')
+    : { emails: [], aboutText: '' };
 
-  // 🤖 Layer 2: Get LLM content with company context (email body/subject only)
+  // 🤖 Layer 2: LLM generates template-guided email
   const llmData = await prepareEmailContent(row, resumeText, companyInfo.aboutText);
   if (!llmData) {
-      throw new Error("Failed to generate LLM content.");
+    throw new Error('Failed to generate LLM content.');
   }
 
-  // 📋 Layer 3: Collect and STRICTLY validate all emails
+  // 📋 Layer 3: Collect and validate all candidate emails
   const candidates = new Set();
-  
-  const addIfValid = (email) => {
-    if (!email) return;
-    const cleanEmail = email.trim().toLowerCase();
-    if (validator.validate(cleanEmail)) {
-      candidates.add(cleanEmail);
-    }
+
+  const addIfValid = (e) => {
+    if (!e) return;
+    const clean = e.trim().toLowerCase();
+    if (validator.validate(clean)) candidates.add(clean);
   };
 
-  // 1. Add from Excel
-  addIfValid(row.Email);
+  addIfValid(email);
 
-  // 2. Add from Scraper (real scraped emails only, no fabricated ones)
-  for (const email of companyInfo.emails) {
+  for (const e of companyInfo.emails) {
     if (candidates.size >= 5) break;
-    addIfValid(email);
+    addIfValid(e);
   }
 
   if (candidates.size === 0) {
-    console.log(`⚠️ No valid emails found for ${row.Company || 'Unknown Company'}`);
+    console.log(`⚠️ No valid emails found for ${company}`);
     return null;
   }
 
-  // 🔒 Layer 4: Advanced validation & Reputation check
+  // 🔒 Layer 4: Reputation + MX check
   const validatedEmails = [];
-  for (const email of candidates) {
-    const rep = await validateEmailReputation(email);
+  for (const e of candidates) {
+    const rep = await validateEmailReputation(e);
     if (rep.isValid) {
       if (!rep.isHighQuality) {
-        console.log(`  ⚠ Note: ${email} is ${rep.reason}. Sending anyway.`);
+        console.log(`  ⚠ Note: ${e} is ${rep.reason}. Sending anyway.`);
       }
-      validatedEmails.push(email);
+      validatedEmails.push(e);
     } else {
-      console.log(`  🚫 Skipping ${email} — ${rep.reason}`);
+      console.log(`  🚫 Skipping ${e} — ${rep.reason}`);
     }
   }
 
   if (validatedEmails.length === 0) {
-    console.log(`⚠️ All emails failed MX validation for ${row.Company || 'Unknown Company'}`);
+    console.log(`⚠️ All emails failed MX validation for ${company}`);
     return null;
   }
 
@@ -85,7 +82,4 @@ const sendMail = async (row, resumeText) => {
   return toList;
 };
 
-module.exports = {
-  sendMail
-};
-
+module.exports = { sendMail };
