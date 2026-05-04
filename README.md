@@ -1,115 +1,155 @@
-# Mailer Bot: AI-Powered Outreach (V1 + V2)
+# Mailer Bot — AI-Powered, Template-Driven Cold Outreach
 
-An automated mailing bot that sends personalized cold emails for job/internship applications. Powered by OpenRouter LLMs, with dynamic contact discovery, daily-limit management, and now **two modes** for two different recruiter datasets.
+An automated cold-email bot for job outreach. Reads a `.docx` template, your resume PDF, and a recruiter spreadsheet, then asks an LLM to **fill the template** for each recruiter — no placeholders, no invented numbers, ready to send.
 
 ---
 
 ## 🚀 Quick Start
 
 ```bash
+npm install
 npm start
 ```
 
-The launcher will interactively ask you **two questions**:
-
-1. **Version** — V1 (generic HR contacts from `hr.xlsx`) or V2 (named recruiters from `Recruiter Email - Bengaluru_ Delhi-NCR.xlsx`)
-2. **Resume PDF** — picks from any `.pdf` file in the project root
-
-That's it. No flags, no separate scripts needed.
-
----
-
-## 🆚 V1 vs V2
-
-| Feature | V1 | V2 |
-|---|---|---|
-| **Data File** | `hr.xlsx` | `Recruiter Email - Bengaluru_ Delhi-NCR.xlsx` |
-| **Sheets** | Single sheet | Two sheets (Bengaluru + Delhi-NCR) |
-| **Email column** | `Email` | `Email Id` |
-| **Company column** | `Company` | `Company Name` |
-| **Extra data** | — | `Name`, `Job Profile`, `LinkedIn Profile`, `Location`, `account/website_url` |
-| **Progress** | `progress.json` | `progress_v2.json` |
-| **Email style** | Generic company-targeted | Addressed directly to the recruiter by name |
-
-### V2 Excel Format
-
-The new file has two sheets. Each row looks like:
-
-| Name | Job Profile | Company Name | Email Id | LinkedIn Profile | Location | account/website_url | account/linkedin_url |
-|---|---|---|---|---|---|---|---|
-| Shrishti Singh | Associate Talent Acquisition | Zyion Group | shrishti.singh@zyon.com | linkedin.com/in/... | Bengaluru, Karnataka | zyon.com | ... |
+The launcher will:
+1. Detect every `.pdf` in the project root and let you pick one as your resume.
+2. Load `HR_Contact_List.xlsx` (or whatever `DATA_FILE` you set in `.env`).
+3. For each row: scrape the company, ask the LLM to fill the template, validate emails, send via Gmail.
+4. Save progress to `progress.json` so the next run resumes where it left off.
 
 ---
 
 ## 📦 Setup
 
-### Prerequisites
-1. **Node.js** v16 or higher
-2. **Gmail App Password** (not your regular password):
-   - Google Account → Security → 2-Step Verification → App Passwords
+### 1. Prerequisites
+- **Node.js** v16+
+- A **Gmail App Password** (Google Account → Security → 2-Step Verification → App Passwords). The 16 chars go in `.env` with **no spaces**.
 
-### Step 1: Clone & Install
+### 2. Install
 ```bash
 git clone <repository-url>
 cd Mailer
 npm install
 ```
 
-### Step 2: Environment Configuration
-
+### 3. `.env`
 Copy `.env_example.txt` to `.env` and fill in:
 
 | Variable | Description |
 |---|---|
 | `EMAIL_USER` | Your Gmail address |
-| `EMAIL_PASS` | 16-char Gmail App Password |
-| `OPENROUTER_API_KEY` | Get free at [openrouter.ai](https://openrouter.ai) |
+| `EMAIL_PASS` | 16-char Gmail App Password (no spaces) |
+| `OPENROUTER_API_KEY` | Get one at [openrouter.ai](https://openrouter.ai) |
 | `OPENROUTER_MODEL` | Primary model, e.g. `google/gemini-2.0-flash-001` |
-| `OPENROUTER_FALLBACK_MODELS` | Comma-separated backup models |
-| `DAILY_LIMIT` | Max emails per run (default: 20) |
-| `DELAY_MIN` / `DELAY_MAX` | Delay range between sends in ms (default: 20000–30000) |
+| `OPENROUTER_FALLBACK_MODELS` | Comma-separated backups — tried in order on failure |
+| `DAILY_LIMIT` | Max successful sends per run (default: 20) |
+| `DELAY_MIN` / `DELAY_MAX` | Random delay between sends, in ms (default: 20000–30000) |
+| `DATA_FILE` *(optional)* | Override the spreadsheet path. Defaults to `HR_Contact_List.xlsx` |
 
-### Step 3: Add Your Data
+### 4. Drop in your data
+- **Spreadsheet** — `HR_Contact_List.xlsx` in the project root. Columns expected: `Name`, `Email`, `Title`, `Company`. (`SNo` and others are ignored.)
+- **Resume** — any `.pdf` in the project root. The launcher will list them.
+- **Template** — `Cold Email Template.docx` in the project root. Use square-bracket placeholders (`[First Name]`, `[Company Name]`, `[X years]`, `[skill 1]`, `[1 achievement]`, `[Your Name]`, `[LinkedIn]`, etc.). The LLM will replace them all with real values from your resume.
+- *(Optional)* **`user_instructions.md`** — extra sender context the LLM can weave in (see below). **Gitignored — kept private.**
 
-**For V1** — place `hr.xlsx` in the project root with at least `Email` and `Company` columns.
-
-**For V2** — place `Recruiter Email - Bengaluru_ Delhi-NCR.xlsx` in the project root (already included). Two sheets, columns as shown above.
-
-**Resume** — drop any `.pdf` resume(s) in the project root. The launcher will list them and let you choose.
-
-### Step 4: Run
+### 5. Run
 ```bash
 npm start
 ```
 
 ---
 
-## 🏗️ Architecture
+## 🧠 How the Template Flow Works
 
+For every recruiter row, the LLM gets:
+
+1. **The template text** (extracted from the `.docx` — paragraph order and tone preserved).
+2. **Your parsed resume** (text from the chosen PDF).
+3. **Recipient details** (`Name`, `Title`, `Company`).
+4. **Scraped company context** (about/mission text, when found).
+5. **Your `user_instructions.md`**, *if it exists*. The LLM may pull 1–2 of those facts into the email when they're genuinely relevant — it won't dump the whole list.
+
+The LLM must:
+- Follow the template's paragraph structure exactly.
+- Replace every `[bracketed]` placeholder with real values pulled from the resume / recipient / company context.
+- Use only contact links that actually appear in the resume — drop any that aren't there instead of writing a placeholder.
+- Output valid JSON: `{ "subject", "body" }`.
+
+A post-generation guard scans the output for leftover brackets, `X years`, `skill 1`, etc. and **skips the row** if anything slipped through — so a leaky LLM response never reaches a recruiter.
+
+---
+
+## 🛡️ Email Validation Layers
+
+Each candidate address goes through:
+
+1. **Excel column** — the `Email` value from the row.
+2. **Web scrape** — emails found on the company's site (up to 5 candidates total).
+3. **`email-validator`** — RFC syntax check.
+4. **MX + reputation check** — disposable-domain blacklist + DNS MX lookup. Bad ones are dropped; questionable ones go through with a warning.
+
+If nothing valid remains for a row, it's skipped.
+
+---
+
+## 🔁 LLM Fallback Chain
+
+`OPENROUTER_FALLBACK_MODELS` is comma-separated and tried in order:
+
+- 2 retries on `429` (rate limit) for the primary, 1 each for fallbacks.
+- `401 / 402 / 403 / 404` → model is **blacklisted for the rest of the run**.
+- Any other failure → 1.5s pause, then the next model.
+- A successful fallback logs `✅ Fallback model worked: <model>`.
+
+Example:
 ```
-index.js              ← Unified interactive launcher (picks version + PDF)
-src/
-  config.js           ← V1: config, transporter, paths
-  config_v2.js        ← V2: config, transporter, paths
-  utils.js            ← Shared: delay, progress tracking
-  llmService.js       ← V1: LLM prompts (company-focused)
-  llmService_v2.js    ← V2: LLM prompts (recruiter-name personalized)
-  mailService.js      ← V1: email builder & sender
-  mailService_v2.js   ← V2: email builder & sender (uses Email Id)
-  emailScraper.js     ← Shared: domain discovery, web scraping
+OPENROUTER_MODEL=google/gemini-2.0-flash-001
+OPENROUTER_FALLBACK_MODELS=anthropic/claude-haiku-4-5,deepseek/deepseek-chat,meta-llama/llama-3.3-70b-instruct:free
 ```
 
 ---
 
-## ⚙️ How It Works
+## 🏗️ Project Structure
 
-1. **Resume Parse** — reads your chosen PDF and extracts text for LLM context.
-2. **Excel Load** — reads all rows (V2 combines both city sheets automatically).
-3. **Per Row**:
-   - **Company scraping** — finds domain, About page text, and career emails via DuckDuckGo.
-   - **LLM Draft** — writes a short, personalized email (V2 addresses the recruiter by first name).
-   - **LLM Contact Mining** — asks the AI for additional verified HR emails.
-   - **Validation** — all emails are validated before sending. Max 5 recipients per email.
-   - **Send** — delivers via Gmail with your resume attached.
-4. **Progress saved** — picks up where it left off on next run (`progress.json` / `progress_v2.json`).
-5. 🛑 **Stops after 10 successful sends** (or when the list is exhausted).
+```
+index.js                ← Launcher: picks PDF, loads spreadsheet, runs the loop
+Cold Email Template.docx ← The template the LLM fills (your file, your wording)
+HR_Contact_List.xlsx    ← Recruiter rows
+resume.pdf              ← Source of truth for the sender's facts
+user_instructions.md    ← Optional, gitignored sender extras
+.env                    ← Secrets + tuning knobs
+
+src/
+  config.js             ← Env loader, transporter, paths
+  utils.js              ← delay / random-delay / progress save+load
+  templateLoader.js     ← Reads the .docx and user_instructions.md (cached)
+  promptBuilder.js      ← Single source of truth for the LLM prompt
+  llmService.js         ← OpenRouter call + fallback chain + placeholder guard
+  emailScraper.js       ← Domain discovery + about-page scrape
+  validation.js         ← MX + reputation check
+  disposable_domains.js ← Blacklist
+  mailService.js        ← Orchestrates: scrape → LLM → validate → send
+```
+
+---
+
+## ⚙️ Run Flow
+
+1. Validate `.env` (API key, Gmail creds).
+2. Pick a resume PDF; parse to text.
+3. Load all rows from the spreadsheet that have an `Email`.
+4. Resume from `progress.json` if present.
+5. Loop until `DAILY_LIMIT` successful sends or the list is exhausted:
+   - scrape company info
+   - LLM fills the template
+   - validate emails
+   - send with the resume attached
+   - random delay (`DELAY_MIN`–`DELAY_MAX`)
+6. Persist `progress.json` after every row, including failures and skips.
+
+---
+
+## 🔐 Privacy
+
+- `.env`, `resume.pdf`, `progress.json`, and `user_instructions.md` are all in `.gitignore`. Personal data stays local.
+- `user_instructions.md` is the place for soft sender context (projects you've shipped, stack you own, vibe you want the LLM to lean into) — keep it private and edit freely.
