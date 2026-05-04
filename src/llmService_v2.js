@@ -1,4 +1,6 @@
 const OpenAI = require('openai');
+const { loadTemplateText, loadUserInstructions } = require('./templateLoader');
+const { buildTemplatePrompt, detectPlaceholders } = require('./promptBuilder');
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -11,7 +13,6 @@ const openai = new OpenAI({
 
 const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
 
-// Fallback models from .env (comma-separated), stripping quotes
 const FALLBACK_MODELS = (process.env.OPENROUTER_FALLBACK_MODELS || '')
   .split(',')
   .map(m => m.trim().replace(/^['"]|['"]$/g, ''))
@@ -73,55 +74,40 @@ async function getLLMResponse(messages) {
     return null;
 }
 
-/**
- * V2: Generates a personalized email addressed to a named recruiter.
- * Uses: Name, Job Profile, Company Name, Location, website URL from the row.
- */
 async function prepareEmailContent(row, resumeText, companyContext = '') {
     const recruiterName = row.Name || 'Hiring Manager';
-    const jobProfile    = row['Job Profile'] || 'Recruiter';
-    const company       = row['Company Name'] || row.Company || 'your company';
-    const location      = row.Location || '';
-    const websiteUrl    = row['account/website_url'] || '';
+    const jobProfile = row['Job Profile'] || 'Recruiter';
+    const company = row['Company Name'] || row.Company || 'your company';
+    const firstName = recruiterName.split(' ')[0];
 
-    console.log(`🧠 Generating personalized email for ${recruiterName} at ${company}...`);
+    console.log(`🧠 Generating template-guided email for ${recruiterName} at ${company}...`);
 
-    // Step 1: Personalised cold email addressed to the named recruiter
-    const draftPrompt = `
-You are an expert job seeker writing a SHORT, highly tailored cold email.
+    const template = await loadTemplateText();
+    const userInstructions = loadUserInstructions();
 
-Recipient Details:
-- Name: ${recruiterName}
-- Job Profile: ${jobProfile}
-- Company: ${company}
-- Location: ${location}
-- Company Website: ${websiteUrl || 'Not available'}
-
-My Resume:
-${resumeText}
-
-Company Context (Mission/Values):
-${companyContext || 'Not available'}
-
-Rules:
-1. Analyze my resume to determine my core skills, experience level, and the most logical role I would be applying for.
-2. Open with "Hi ${recruiterName.split(' ')[0]}," — address them directly.
-3. Keep the email SHORT (max 3-4 concise paragraphs).
-4. Tailor the application specifically to the role derived from the resume and the Company Context if provided.
-5. Reference the company's location (${location}) naturally if possible.
-6. DO NOT include ANY placeholders like [Link] or [Your Name].
-7. Sign the email with my name as found in the resume.
-8. Output MUST be valid JSON with two keys: "subject" and "body".
-`;
+    const prompt = buildTemplatePrompt({
+        template,
+        resumeText,
+        userInstructions,
+        recipient: { firstName, fullName: recruiterName, title: jobProfile },
+        company,
+        companyContext,
+    });
 
     const draftResponse = await getLLMResponse([
-        { role: "system", content: "You are an expert assistant that generates precise, ready-to-send JSON for cold emails." },
-        { role: "user", content: draftPrompt }
+        { role: "system", content: "You generate ready-to-send cold emails as JSON. The output is sent directly without human review. Follow the supplied template structure exactly and never emit placeholders or brackets." },
+        { role: "user", content: prompt }
     ]);
 
     if (!draftResponse) return null;
 
-    // LLM email guessing removed — was hallucinating fake addresses
+    const bodyMatches = detectPlaceholders(draftResponse.body);
+    const subjectMatches = detectPlaceholders(draftResponse.subject);
+    if (bodyMatches || subjectMatches) {
+        console.warn(`  ⚠️ Placeholder detected in LLM output — skipping row. Found: ${[...(bodyMatches||[]), ...(subjectMatches||[])].join(', ')}`);
+        return null;
+    }
+
     return {
         subject: draftResponse.subject,
         body: draftResponse.body,

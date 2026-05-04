@@ -1,4 +1,6 @@
 const OpenAI = require('openai');
+const { loadTemplateText, loadUserInstructions } = require('./templateLoader');
+const { buildTemplatePrompt, detectPlaceholders } = require('./promptBuilder');
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -11,7 +13,6 @@ const openai = new OpenAI({
 
 const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
 
-// Fallback models from .env (comma-separated), stripping quotes
 const FALLBACK_MODELS = (process.env.OPENROUTER_FALLBACK_MODELS || '')
   .split(',')
   .map(m => m.trim().replace(/^['"]|['"]$/g, ''))
@@ -24,7 +25,7 @@ const blacklistedModels = new Set();
 async function getLLMResponse(messages) {
     for (let modelIdx = 0; modelIdx < MODELS.length; modelIdx++) {
         const model = MODELS[modelIdx];
-        
+
         if (blacklistedModels.has(model)) continue;
 
         const maxRetries = modelIdx === 0 ? 2 : 1;
@@ -57,17 +58,15 @@ async function getLLMResponse(messages) {
                 if (isAuthOrPayment) {
                     console.error(`  🚨 ${model} is unavailable (${status}). Removing from rotation.`);
                     blacklistedModels.add(model);
-                    break; // Skip to next model immediately
-                }
-
-                // Move to next model
-                if (modelIdx < MODELS.length - 1) {
-                    console.warn(`  ⚠️ ${model} failed: ${error.message}. Trying fallback...`);
-                    await new Promise(r => setTimeout(r, 1500)); // Delay between models to prevent global 429s
                     break;
                 }
 
-                // All models exhausted
+                if (modelIdx < MODELS.length - 1) {
+                    console.warn(`  ⚠️ ${model} failed: ${error.message}. Trying fallback...`);
+                    await new Promise(r => setTimeout(r, 1500));
+                    break;
+                }
+
                 console.error(`  ❌ All models failed. Last error:`, error.message);
                 return null;
             }
@@ -77,36 +76,36 @@ async function getLLMResponse(messages) {
 }
 
 async function prepareEmailContent(row, resumeText, companyContext = '') {
-    console.log(`🧠 Generating personalized email for ${row.Company}...`);
+    const company = row.Company || row['Company Name'] || 'your company';
+    console.log(`🧠 Generating template-guided email for ${company}...`);
 
-    // Step 1: Get Custom Draft
-    const draftPrompt = `
-You are an expert technical recruiter and job seeker.
-Write a SHORT, highly tailored cold email applying for an appropriate role at ${row.Company}.
+    const template = await loadTemplateText();
+    const userInstructions = loadUserInstructions();
 
-My Resume Context:
-${resumeText}
-
-Company Context (Mission/Values):
-${companyContext || 'Not available'}
-
-Rules:
-1. Analyze my resume to determine my core skills, experience level, and the most logical role I would be applying for.
-2. KEEP IT SHORT (max 3-4 concise paragraphs).
-3. Tailor the application specifically to the role derived from the resume and the Company Context if provided.
-4. DO NOT include ANY placeholders like [Link] or [Your Name].
-5. Sign the email with my name as found in the resume.
-6. Output MUST be valid JSON with two keys: "subject" and "body".
-`;
+    // V1 has no named recipient — greet the team / hiring manager.
+    const prompt = buildTemplatePrompt({
+        template,
+        resumeText,
+        userInstructions,
+        recipient: { firstName: 'team', fullName: '', title: 'Hiring Manager' },
+        company,
+        companyContext,
+    });
 
     const draftResponse = await getLLMResponse([
-        { role: "system", content: "You are an expert assistant that generates precise, ready-to-send JSON for cold emails." },
-        { role: "user", content: draftPrompt }
+        { role: "system", content: "You generate ready-to-send cold emails as JSON. The output is sent directly without human review. Follow the supplied template structure exactly and never emit placeholders or brackets." },
+        { role: "user", content: prompt }
     ]);
 
     if (!draftResponse) return null;
 
-    // LLM email guessing removed — was hallucinating fake addresses
+    const bodyMatches = detectPlaceholders(draftResponse.body);
+    const subjectMatches = detectPlaceholders(draftResponse.subject);
+    if (bodyMatches || subjectMatches) {
+        console.warn(`  ⚠️ Placeholder detected in LLM output — skipping row. Found: ${[...(bodyMatches||[]), ...(subjectMatches||[])].join(', ')}`);
+        return null;
+    }
+
     return {
         subject: draftResponse.subject,
         body: draftResponse.body,
