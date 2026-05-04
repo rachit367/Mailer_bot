@@ -1,6 +1,6 @@
 const OpenAI = require('openai');
 const { loadTemplateText, loadUserInstructions } = require('./templateLoader');
-const { buildTemplatePrompt, detectPlaceholders } = require('./promptBuilder');
+const { buildTemplatePrompt, detectPlaceholders, detectFakeExperience } = require('./promptBuilder');
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -108,6 +108,15 @@ async function prepareEmailContent(row, resumeText, companyContext = '') {
   const subjectMatches = detectPlaceholders(response.subject);
   if (bodyMatches || subjectMatches) {
     console.warn(`  ⚠️ Placeholder detected in LLM output — skipping row. Found: ${[...(bodyMatches||[]), ...(subjectMatches||[])].join(', ')}`);
+    return null;
+  }
+
+  const fakeExp = [
+    ...(detectFakeExperience(response.body) || []),
+    ...(detectFakeExperience(response.subject) || []),
+  ];
+  if (fakeExp.length) {
+    console.warn(`  ⚠️ LLM hallucinated years of experience — skipping row. Found: ${fakeExp.join(', ')}`);
     return null;
   }
 

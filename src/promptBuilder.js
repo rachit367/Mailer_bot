@@ -6,7 +6,7 @@ function buildTemplatePrompt({ template, resumeText, userInstructions, recipient
   } = recipient;
 
   const userInstructionsBlock = userInstructions
-    ? `Additional sender context (real, verified — pick AT MOST ONE concrete project/result from here that is most relevant to ${company}; weave it in naturally as a single phrase, do NOT list multiple items):\n${userInstructions}\n`
+    ? `Additional sender context (real projects — pick AT MOST ONE concrete item that fits ${company}; weave it in as a single phrase, never as a list):\n${userInstructions}\n`
     : '';
 
   return `
@@ -24,43 +24,73 @@ Recipient:
 - Title: ${title || 'Hiring Manager'}
 - Company: ${company}
 
-Resume (truth source for sender's name, role, years, skills, achievements, links):
+═══════════════════════════════════════════════
+RESUME — THIS IS THE ONLY SOURCE OF TRUTH FOR SENDER FACTS.
+Read it carefully. Extract the sender's actual name, education status (student / final-year / graduated), real project names, real metrics, real links. Do NOT use anything outside this resume + the additional sender context block below.
+═══════════════════════════════════════════════
 ${resumeText}
+═══════════════════════════════════════════════
 
-Company context (scraped — use for the hook):
+Company context (scraped — only for the hook in P1):
 ${companyContext || 'Not available — use widely known facts about the company.'}
 
 ${userInstructionsBlock}
-HARD CONSTRAINTS — emails that violate these get deleted unread:
-1. TOTAL BODY LENGTH: 70–110 words. Count them. Anything longer is rejected.
-2. STRUCTURE — exactly 3 short paragraphs, separated by ONE blank line each:
-   • P1 (1 sentence): "Hi ${firstName}," + a one-line hook tying you to ${company} (their product, hiring focus, or a real fact from the company context). No fluff like "I came across…".
-   • P2 (2 sentences MAX): who you are in one line — role, years, top stack — then ONE quantified achievement pulled directly from the resume (real number, real project). Optionally swap the achievement for one concrete item from the additional sender context if it fits ${company} better.
-   • P3 (2 sentences MAX): a direct ask — "Open to a 15-min chat this week?" + "Resume attached." Nothing more.
-3. NO filler: drop "I really liked", "I came across while exploring", "I'd love to learn more about your goals", "share how I can add value", "expanding its HR tech stack", "robust high-performance APIs", and any similar template residue. Be concrete or be silent.
-4. SUBJECT LINE: under 60 chars, names the role + one real skill. Examples:
-   • "Backend Engineer — Node.js + MongoDB, 1 yr"
-   • "Full-stack dev (Node/React) interested in ${company}"
-   Avoid: "Exploring opportunities at…", "Application for…".
-5. SIGNATURE: full name + only the contact links that EXIST in the resume. If the resume has GitHub/LinkedIn URLs, use the bare URLs — no "LinkedIn:" labels, no markdown, no angle brackets. If a link is missing in the resume, drop it; do NOT write "GitHub" or "[Link]".
-6. NO PLACEHOLDERS of any kind: no [brackets], no <angles>, no "X years", no "skill 1", no invented metrics.
-7. Greet with first name only ("${firstName}"). If first name is generic ("team", "Hiring Manager"), open with "Hi team," instead.
+═══════════════════════════════════════════════
+HARD CONSTRAINTS — violations make the email unusable:
+═══════════════════════════════════════════════
 
-OUTPUT — MUST be valid JSON:
+A. RESUME FIDELITY (most important):
+   1. NEVER claim years of professional experience unless the resume EXPLICITLY says "X years of experience" at a real company. Internships, freelance, and college projects do NOT count as years of experience.
+   2. If the resume shows the sender is a student / final-year / fresh graduate / has only college projects → the sender is a FRESHER. Open the pitch with "I'm a final-year student / recent grad" or "I'm a developer who built…" — NEVER write "1 year of experience", "2 years of experience", "Backend Engineer with X years".
+   3. NEVER invent metrics. Only use numbers that literally appear in the resume. If the resume has no quantified result, just describe one project concretely without inventing a percentage.
+   4. NEVER invent job titles. The sender's title is whatever the resume actually shows (often "Student", "Developer", "Intern" — that's fine).
+   5. Skills, project names, URLs (LinkedIn, GitHub, portfolio), phone — only what the resume contains. If a link is missing, omit that line from the signature. Do NOT write the word "LinkedIn" or "GitHub" without an actual URL.
+
+B. STRUCTURE (exactly 3 paragraphs, ONE blank line between each):
+   • P1 (1 sentence): "Hi ${firstName}," + one-line hook tying you to ${company} (their product, hiring focus, or a real fact from the company context). No "I came across while exploring".
+   • P2 (1–2 sentences MAX): who you are in plain language — student/fresher status + your stack — then ONE concrete project from the resume OR ONE concrete project from the additional sender context (whichever fits ${company} better). Describe it in real terms ("built X using Y", "migrated monolith to microservices, deployed on Vultr with Docker + Nginx") — no invented numbers.
+   • P3 (1–2 sentences MAX): direct ask — "Open to a 15-min chat this week?" + "Resume attached." Nothing more.
+
+C. LENGTH: 60–100 words for the whole body (excluding signature). Count them.
+
+D. SUBJECT LINE: under 60 chars, names the actual stack + intent. Examples for a fresher:
+   • "Node.js + MongoDB developer — interested in ${company}"
+   • "Full-stack (Node/React) — looking to join ${company}"
+   • "Backend developer (Node/Mongo, Docker) — ${company}"
+   AVOID: "Exploring opportunities at…", "Backend Engineer with X yrs", "Application for…".
+
+E. NO FILLER PHRASES — these are banned:
+   "I really liked", "I came across while exploring", "I'd love to learn more about your goals", "share how I can add value", "expanding its HR tech stack", "robust high-performance APIs", "scalable enterprise solutions", "passionate about", "honored to apply".
+
+F. NO PLACEHOLDERS: no [brackets], no <angles>, no "X years", no "skill 1", no template residue.
+
+G. GREETING: first name only ("${firstName}"). If first name is generic ("team", "Hiring Manager"), open with "Hi team,".
+
+═══════════════════════════════════════════════
+OUTPUT — MUST be valid JSON, exactly:
 {
   "subject": "...",
-  "body": "Hi ${firstName},\\n\\n<P1>\\n\\n<P2>\\n\\n<P3>\\n\\nBest,\\n<full name>\\n<link1>\\n<link2 if real>"
+  "body": "Hi ${firstName},\\n\\n<P1>\\n\\n<P2>\\n\\n<P3>\\n\\nBest,\\n<full name from resume>\\n<linkedin url if in resume>\\n<phone if in resume>\\n<github url if in resume>"
 }
 
-The "body" string MUST contain literal "\\n\\n" between paragraphs and "\\n" between signature lines. No HTML tags.
+The "body" string MUST contain literal "\\n\\n" between paragraphs and "\\n" between signature lines. No HTML tags. Omit signature lines whose URL/value is not in the resume.
 `.trim();
 }
 
-const PLACEHOLDER_REGEX = /\[[^\]]*\]|<[^>]*>|\bX\s*years\b|\bskill\s*\d\b|\byour name\b|\byour role\b|\b1 achievement\b/gi;
+const PLACEHOLDER_REGEX = /\[[^\]]*\]|<[^>]*>|\bX\s*years?\b|\bskill\s*\d\b|\byour name\b|\byour role\b|\b1 achievement\b/gi;
+
+// Hallucinated-experience patterns — block emails claiming years of experience.
+// Matches "1 year of experience", "2 years of experience", "with 3 years", etc.
+const FAKE_EXPERIENCE_REGEX = /\b(\d+\+?|one|two|three|four|five|six|seven|eight|nine|ten)\s*(\+|plus)?\s*years?\s*(of\s*)?(professional\s*|industry\s*|work\s*|hands-on\s*)?experience\b/gi;
 
 function detectPlaceholders(text) {
   if (!text) return null;
   return text.match(PLACEHOLDER_REGEX);
 }
 
-module.exports = { buildTemplatePrompt, detectPlaceholders };
+function detectFakeExperience(text) {
+  if (!text) return null;
+  return text.match(FAKE_EXPERIENCE_REGEX);
+}
+
+module.exports = { buildTemplatePrompt, detectPlaceholders, detectFakeExperience };
