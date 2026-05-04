@@ -4,6 +4,28 @@ const { transporter } = require('./config');
 const { prepareEmailContent } = require('./llmService');
 const { findCompanyInfo } = require('./emailScraper');
 const { validateEmailReputation } = require('./validation');
+const { verifyRecipient } = require('./smtpVerify');
+
+const ENABLE_SMTP_PROBE = process.env.SMTP_PROBE !== 'false'; // on by default
+
+// Convert plain-text LLM body into Gmail-friendly HTML so paragraph spacing renders.
+function bodyToHtml(text) {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  const linked = escaped.replace(/\b(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>');
+
+  const paragraphs = linked
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => `<p style="margin:0 0 12px 0;">${p.replace(/\n/g, '<br>')}</p>`)
+    .join('\n');
+
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222;">${paragraphs}</div>`;
+}
 
 const sendMail = async (row, resumeText) => {
   const email      = row.Email || '';
@@ -12,20 +34,16 @@ const sendMail = async (row, resumeText) => {
 
   if (!email && !company) return null;
 
-  // 🔍 Layer 1: Find domain + about context via web scrape
   const companyInfo = company
     ? await findCompanyInfo(company, '')
     : { emails: [], aboutText: '' };
 
-  // 🤖 Layer 2: LLM generates template-guided email
   const llmData = await prepareEmailContent(row, resumeText, companyInfo.aboutText);
   if (!llmData) {
     throw new Error('Failed to generate LLM content.');
   }
 
-  // 📋 Layer 3: Collect and validate all candidate emails
   const candidates = new Set();
-
   const addIfValid = (e) => {
     if (!e) return;
     const clean = e.trim().toLowerCase();
@@ -33,7 +51,6 @@ const sendMail = async (row, resumeText) => {
   };
 
   addIfValid(email);
-
   for (const e of companyInfo.emails) {
     if (candidates.size >= 5) break;
     addIfValid(e);
@@ -44,22 +61,50 @@ const sendMail = async (row, resumeText) => {
     return null;
   }
 
-  // 🔒 Layer 4: Reputation + MX check
-  const validatedEmails = [];
+  // Reputation + MX
+  const mxPassed = [];
   for (const e of candidates) {
     const rep = await validateEmailReputation(e);
     if (rep.isValid) {
       if (!rep.isHighQuality) {
         console.log(`  ⚠ Note: ${e} is ${rep.reason}. Sending anyway.`);
       }
-      validatedEmails.push(e);
+      mxPassed.push(e);
     } else {
       console.log(`  🚫 Skipping ${e} — ${rep.reason}`);
     }
   }
 
-  if (validatedEmails.length === 0) {
+  if (mxPassed.length === 0) {
     console.log(`⚠️ All emails failed MX validation for ${company}`);
+    return null;
+  }
+
+  // SMTP-level probe — drops "address not found" before we waste a send.
+  let validatedEmails = mxPassed;
+  if (ENABLE_SMTP_PROBE) {
+    validatedEmails = [];
+    for (const e of mxPassed) {
+      try {
+        const probe = await verifyRecipient(e);
+        if (probe.ok) {
+          validatedEmails.push(e);
+        } else if (probe.status === 'rejected') {
+          console.log(`  🚫 SMTP rejected ${e} (${probe.code || ''}): ${(probe.reason || '').slice(0, 120)}`);
+        } else {
+          // Unknown/timeout — server probably blocks port 25 (common on residential ISPs). Send anyway.
+          console.log(`  ❓ SMTP probe inconclusive for ${e} — sending anyway.`);
+          validatedEmails.push(e);
+        }
+      } catch (err) {
+        console.log(`  ❓ SMTP probe error for ${e}: ${err.message} — sending anyway.`);
+        validatedEmails.push(e);
+      }
+    }
+  }
+
+  if (validatedEmails.length === 0) {
+    console.log(`⚠️ All emails rejected by destination SMTP for ${company}`);
     return null;
   }
 
@@ -70,6 +115,7 @@ const sendMail = async (row, resumeText) => {
     to: toList,
     subject: llmData.subject,
     text: llmData.body,
+    html: bodyToHtml(llmData.body),
     attachments: [
       {
         filename: path.basename(resumePath),

@@ -6,16 +6,16 @@ function buildTemplatePrompt({ template, resumeText, userInstructions, recipient
   } = recipient;
 
   const userInstructionsBlock = userInstructions
-    ? `Additional Sender Context (USE THESE FACTS — they are real and verified about the sender; weave the most relevant 1–2 items into the email naturally where they strengthen the pitch):\n${userInstructions}\n`
+    ? `Additional sender context (real, verified — pick AT MOST ONE concrete project/result from here that is most relevant to ${company}; weave it in naturally as a single phrase, do NOT list multiple items):\n${userInstructions}\n`
     : '';
 
   return `
-You are rewriting a cold email by filling in a fixed template with REAL, FINAL content. Every word in the output must be ready to send — zero placeholders, zero brackets, zero template variables.
+You are writing a SHORT, high-conversion cold email that gets the recipient to reply with an interview slot. The output is sent without human review — every word must be final.
 
 ═══════════════════════════════════════════════
-TEMPLATE (this is the exact structure you must follow — keep paragraph order, tone, and flow identical, just replace bracketed placeholders with real content):
+TEMPLATE (loose guide for tone — DO NOT copy its length; the email you write must be SHORTER than the template):
 ═══════════════════════════════════════════════
-${template || '(no template provided — fall back to a 4-paragraph cold email: greeting+hook, who-I-am, why-I-fit, CTA+sign-off)'}
+${template || '(no template provided)'}
 ═══════════════════════════════════════════════
 
 Recipient:
@@ -24,26 +24,35 @@ Recipient:
 - Title: ${title || 'Hiring Manager'}
 - Company: ${company}
 
-Resume (source of truth for sender's facts — name, role, years, skills, achievements, links):
+Resume (truth source for sender's name, role, years, skills, achievements, links):
 ${resumeText}
 
-Company Context (scraped about/mission text — use it to personalize the hook):
-${companyContext || 'Not available — use widely-known facts about the company instead.'}
+Company context (scraped — use for the hook):
+${companyContext || 'Not available — use widely known facts about the company.'}
 
 ${userInstructionsBlock}
-INSTRUCTIONS:
-1. Follow the template's paragraph structure EXACTLY. Same order, same intent for each paragraph.
-2. Replace every bracketed placeholder ([First Name], [Company Name], [X years], [skill 1], etc.) with REAL values pulled from the resume, the recipient details, or the company context above.
-3. Greet the recipient with their first name only ("${firstName}").
-4. Pull the sender's role title, years of experience, top skills, and one quantified achievement strictly from the resume. Never invent numbers.
-5. If the additional sender context is provided, you MAY enrich the "who I am" or "why I fit" paragraphs with one or two of those points when they strengthen the message — but only if they fit naturally and are relevant to the recipient/company. Do not dump the whole list.
-6. The signature must use the sender's actual name and only the contact links that actually appear in the resume. If a link is missing (e.g. no GitHub), drop that part entirely — never write a placeholder.
-7. Keep the email SHORT — 4 short paragraphs max, the same length as the template.
-8. Subject line: name the actual role and one real skill. Example shape: "Exploring Opportunities at ${company} — <Real Role> with <Real Skill>".
+HARD CONSTRAINTS — emails that violate these get deleted unread:
+1. TOTAL BODY LENGTH: 70–110 words. Count them. Anything longer is rejected.
+2. STRUCTURE — exactly 3 short paragraphs, separated by ONE blank line each:
+   • P1 (1 sentence): "Hi ${firstName}," + a one-line hook tying you to ${company} (their product, hiring focus, or a real fact from the company context). No fluff like "I came across…".
+   • P2 (2 sentences MAX): who you are in one line — role, years, top stack — then ONE quantified achievement pulled directly from the resume (real number, real project). Optionally swap the achievement for one concrete item from the additional sender context if it fits ${company} better.
+   • P3 (2 sentences MAX): a direct ask — "Open to a 15-min chat this week?" + "Resume attached." Nothing more.
+3. NO filler: drop "I really liked", "I came across while exploring", "I'd love to learn more about your goals", "share how I can add value", "expanding its HR tech stack", "robust high-performance APIs", and any similar template residue. Be concrete or be silent.
+4. SUBJECT LINE: under 60 chars, names the role + one real skill. Examples:
+   • "Backend Engineer — Node.js + MongoDB, 1 yr"
+   • "Full-stack dev (Node/React) interested in ${company}"
+   Avoid: "Exploring opportunities at…", "Application for…".
+5. SIGNATURE: full name + only the contact links that EXIST in the resume. If the resume has GitHub/LinkedIn URLs, use the bare URLs — no "LinkedIn:" labels, no markdown, no angle brackets. If a link is missing in the resume, drop it; do NOT write "GitHub" or "[Link]".
+6. NO PLACEHOLDERS of any kind: no [brackets], no <angles>, no "X years", no "skill 1", no invented metrics.
+7. Greet with first name only ("${firstName}"). If first name is generic ("team", "Hiring Manager"), open with "Hi team," instead.
 
-CRITICAL — output is sent without human review:
-- No square brackets, no angle brackets, no "X years", no "skill 1", no "[Link]", no "[Your Name]".
-- Output MUST be valid JSON with exactly two keys: "subject" (string) and "body" (string).
+OUTPUT — MUST be valid JSON:
+{
+  "subject": "...",
+  "body": "Hi ${firstName},\\n\\n<P1>\\n\\n<P2>\\n\\n<P3>\\n\\nBest,\\n<full name>\\n<link1>\\n<link2 if real>"
+}
+
+The "body" string MUST contain literal "\\n\\n" between paragraphs and "\\n" between signature lines. No HTML tags.
 `.trim();
 }
 
