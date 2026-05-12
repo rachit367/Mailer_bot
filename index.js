@@ -1,7 +1,9 @@
 require('dotenv').config();
 const fs = require('fs');
+const path = require('path');
 const readline = require('readline');
 const ExcelJS = require('exceljs');
+const fastCsv = require('fast-csv');
 const pdf = require('pdf-parse');
 
 const { delay, randomDelay, loadProgress, saveProgress } = require('./src/utils');
@@ -32,12 +34,76 @@ function listPDFs() {
   return fs.readdirSync('.').filter(f => f.toLowerCase().endsWith('.pdf'));
 }
 
-async function loadRows() {
-  if (!fs.existsSync(DATA_FILE)) {
-    console.error(`❌ Data file "${DATA_FILE}" not found in project root.`);
-    process.exit(1);
-  }
+function splitEmails(raw) {
+  if (!raw) return [];
+  return raw
+    .split(/;\s*|,\s*/)
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+}
 
+// Pick the most "send-worthy" guessed emails: prefer short patterns like
+// firstname@domain over first.last@ / flast@ / firstnamelast@ aliases.
+function rankGuessedEmails(emails) {
+  return [...emails].sort((a, b) => {
+    const localA = a.split('@')[0] || '';
+    const localB = b.split('@')[0] || '';
+    const scoreA = (localA.includes('.') ? 2 : 0) + Math.floor(localA.length / 6);
+    const scoreB = (localB.includes('.') ? 2 : 0) + Math.floor(localB.length / 6);
+    return scoreA - scoreB;
+  });
+}
+
+// If all emails land in one founder's inbox (e.g. dominik@... + dominik.helmreich@...),
+// greet by that founder's first name. Otherwise leave blank → prompt builder uses "team".
+function pickGreetingName(foundersRaw, emails) {
+  if (!foundersRaw || !emails.length) return '';
+  const founders = foundersRaw.split(/;\s*/).map(s => s.trim()).filter(Boolean);
+  if (founders.length === 0) return '';
+
+  const locals = emails.map(e => (e.split('@')[0] || '').toLowerCase());
+  for (const full of founders) {
+    const first = full.split(/\s+/)[0].toLowerCase();
+    if (first && locals.every(l => l.includes(first))) {
+      return full;
+    }
+  }
+  return '';
+}
+
+async function loadCsvRows() {
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    fs.createReadStream(DATA_FILE)
+      .pipe(fastCsv.parse({ headers: true, trim: true }))
+      .on('error', reject)
+      .on('data', (r) => {
+        const found = splitEmails(r.emails_found);
+        const guessed = rankGuessedEmails(splitEmails(r.emails_guessed)).slice(0, 2);
+        const emails = found.length ? found : guessed;
+        if (!r.name || emails.length === 0) return; // skip unmailable
+
+        rows.push({
+          Company: r.name,
+          Website: r.website || '',
+          YCPage: r.yc_page || '',
+          YCOneLiner: r.one_liner || '',
+          YCDescription: r.description || '',
+          Emails: emails,
+          // Primary email kept for log lines / dedup; full list also passed via Emails.
+          Email: emails[0],
+          // If we mail a single founder, greet by their first name; otherwise fall back to "team".
+          Name: pickGreetingName(r.founders_names, emails),
+          Title: r.founders_names ? 'Founder' : '',
+          FoundersNames: r.founders_names || '',
+          Location: r.location || '',
+        });
+      })
+      .on('end', () => resolve(rows));
+  });
+}
+
+async function loadExcelRows() {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(DATA_FILE);
   const worksheet = workbook.getWorksheet(1);
@@ -54,11 +120,35 @@ async function loadRows() {
     for (const [col, name] of Object.entries(headers)) {
       rowData[name] = getCellText(row.getCell(Number(col)).value);
     }
-    if (rowData['Email']) rows.push(rowData);
+
+    if (!rowData.Company) {
+      rowData.Company = rowData['company name'] || rowData['Company Name'] || '';
+    }
+    if (!rowData.Website) rowData.Website = rowData['website'] || '';
+    if (!rowData.YCPage)  rowData.YCPage  = rowData['YC company page'] || '';
+    rowData.YCOneLiner   = rowData['one liner'] || '';
+    rowData.YCDescription = rowData['description'] || '';
+
+    if (rowData.Company) rows.push(rowData);
   });
 
   console.log(`  📄 Sheet "${worksheet.name}": ${rows.length} rows loaded`);
   return rows;
+}
+
+async function loadRows() {
+  if (!fs.existsSync(DATA_FILE)) {
+    console.error(`❌ Data file "${DATA_FILE}" not found in project root.`);
+    process.exit(1);
+  }
+
+  const ext = path.extname(DATA_FILE).toLowerCase();
+  if (ext === '.csv') {
+    const rows = await loadCsvRows();
+    console.log(`  📄 CSV "${DATA_FILE}": ${rows.length} mailable rows loaded`);
+    return rows;
+  }
+  return loadExcelRows();
 }
 
 async function main() {

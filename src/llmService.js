@@ -75,12 +75,12 @@ async function getLLMResponse(messages) {
 }
 
 async function prepareEmailContent(row, resumeText, companyContext = '') {
-  const recruiterName = row.Name || 'Hiring Manager';
-  const recruiterTitle = row.Title || 'HR';
+  const recruiterName = row.Name || 'team';
+  const recruiterTitle = row.Title || 'Founding team';
   const company = row.Company || row['Company Name'] || 'your company';
   const firstName = recruiterName.split(' ')[0];
 
-  console.log(`🧠 Generating template-guided email for ${recruiterName} (${recruiterTitle}) at ${company}...`);
+  console.log(`🧠 Generating template-guided email for ${recruiterName} at ${company}...`);
 
   const template = await loadTemplateText();
   const userInstructions = loadUserInstructions();

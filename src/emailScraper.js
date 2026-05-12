@@ -133,9 +133,23 @@ async function scrapeSiteEmails(domain) {
 }
 
 /**
+ * Scrapes a YC company page (or any single URL) for emails.
+ */
+async function scrapeUrlForEmails(url) {
+    if (!url) return [];
+    try {
+        const resp = await axios.get(url, { timeout: 7000, headers: { 'User-Agent': getUA() } });
+        const $ = cheerio.load(resp.data);
+        return extractEmails($('body').text());
+    } catch (e) {
+        return [];
+    }
+}
+
+/**
  * Orchestrator: Finds domain, context, and emails
  */
-async function findCompanyInfo(companyName, providedUrl) {
+async function findCompanyInfo(companyName, providedUrl, ycPageUrl = '') {
     let domain = '';
     if (providedUrl) {
         // Clean URL to get domain
@@ -144,13 +158,18 @@ async function findCompanyInfo(companyName, providedUrl) {
     } else {
         domain = await findCompanyDomain(companyName);
     }
-    
+
     const aboutText = await scrapeAboutPage(domain);
     const ddgEmails = await searchDDG(companyName);
     const siteEmails = await scrapeSiteEmails(domain);
-    
+    let ycEmails = [];
+    if (ycPageUrl) {
+        console.log(`🟠 Scraping YC page for ${companyName}...`);
+        ycEmails = await scrapeUrlForEmails(ycPageUrl);
+    }
+
     // Combine and deduplicate emails
-    const combinedEmails = Array.from(new Set([...ddgEmails, ...siteEmails].map(e => e.toLowerCase())));
+    const combinedEmails = Array.from(new Set([...ddgEmails, ...siteEmails, ...ycEmails].map(e => e.toLowerCase())));
 
     return {
         domain,

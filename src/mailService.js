@@ -30,15 +30,29 @@ function bodyToHtml(text) {
 const sendMail = async (row, resumeText) => {
   const email      = row.Email || '';
   const company    = row.Company || row['Company Name'] || 'Unknown';
+  const website    = row.Website || '';
+  const ycPage     = row.YCPage  || '';
   const resumePath = row._resumePath;
+  const preEmails  = Array.isArray(row.Emails) ? row.Emails : [];
 
-  if (!email && !company) return null;
+  if (!email && !company && preEmails.length === 0) return null;
 
-  const companyInfo = company
-    ? await findCompanyInfo(company, '')
-    : { emails: [], aboutText: '' };
+  // CSV path: emails are already supplied; we have YC one-liner + description for context.
+  // Excel path: no emails, fall back to the scraper.
+  const hasContextAlready = !!(row.YCOneLiner || row.YCDescription);
+  const skipScrape = preEmails.length > 0 && hasContextAlready;
 
-  const llmData = await prepareEmailContent(row, resumeText, companyInfo.aboutText);
+  const companyInfo = skipScrape
+    ? { emails: [], aboutText: '' }
+    : (company ? await findCompanyInfo(company, website, ycPage) : { emails: [], aboutText: '' });
+
+  // Merge YC one-liner + description + scraped about into a single context blob.
+  const ycContextParts = [row.YCOneLiner, row.YCDescription, companyInfo.aboutText]
+    .map(s => (s || '').trim())
+    .filter(Boolean);
+  const mergedContext = ycContextParts.join('\n\n');
+
+  const llmData = await prepareEmailContent(row, resumeText, mergedContext);
   if (!llmData) {
     throw new Error('Failed to generate LLM content.');
   }
@@ -50,6 +64,10 @@ const sendMail = async (row, resumeText) => {
     if (validator.validate(clean)) candidates.add(clean);
   };
 
+  for (const e of preEmails) {
+    if (candidates.size >= 5) break;
+    addIfValid(e);
+  }
   addIfValid(email);
   for (const e of companyInfo.emails) {
     if (candidates.size >= 5) break;
@@ -57,7 +75,7 @@ const sendMail = async (row, resumeText) => {
   }
 
   if (candidates.size === 0) {
-    console.log(`⚠️ No valid emails found for ${company}`);
+    console.log(`⚠️ No valid emails found for ${company} — skipping.`);
     return null;
   }
 
