@@ -71,10 +71,10 @@ function pickGreetingName(foundersRaw, emails) {
   return '';
 }
 
-async function loadCsvRows() {
+async function loadF25CsvRows(file) {
   return new Promise((resolve, reject) => {
     const rows = [];
-    fs.createReadStream(DATA_FILE)
+    fs.createReadStream(file)
       .pipe(fastCsv.parse({ headers: true, trim: true }))
       .on('error', reject)
       .on('data', (r) => {
@@ -84,6 +84,7 @@ async function loadCsvRows() {
         if (!r.name || emails.length === 0) return; // skip unmailable
 
         rows.push({
+          _mode: 'f25',
           Company: r.name,
           Website: r.website || '',
           YCPage: r.yc_page || '',
@@ -97,6 +98,42 @@ async function loadCsvRows() {
           Title: r.founders_names ? 'Founder' : '',
           FoundersNames: r.founders_names || '',
           Location: r.location || '',
+        });
+      })
+      .on('end', () => resolve(rows));
+  });
+}
+
+// all-emails.csv has headers: #,Company,Domain,Email 1,Email 2,Email 3,Source,Employees,Country,City,Description,CEO,Website,CareersURL,Twitter
+// No founder bios → mode-2 prompt branch will produce a shorter, description-anchored email.
+async function loadAllCsvRows(file) {
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    fs.createReadStream(file)
+      .pipe(fastCsv.parse({ headers: true, trim: true }))
+      .on('error', reject)
+      .on('data', (r) => {
+        const emails = [r['Email 1'], r['Email 2'], r['Email 3']]
+          .map(e => (e || '').trim().toLowerCase())
+          .filter(Boolean);
+        if (!r.Company || emails.length === 0) return;
+
+        rows.push({
+          _mode: 'all',
+          Company: r.Company,
+          Domain: r.Domain || '',
+          Website: r.Website || (r.Domain ? `https://${r.Domain}` : ''),
+          Emails: emails,
+          Email: emails[0],
+          // Mode 2: greeting is fixed to "Hi there," — Name is blank, prompt branches on _mode.
+          Name: '',
+          Title: '',
+          Description: r.Description || '',
+          CEO: r.CEO || '',
+          CareersURL: r.CareersURL || '',
+          Country: r.Country || '',
+          City: r.City || '',
+          Employees: r.Employees || '',
         });
       })
       .on('end', () => resolve(rows));
@@ -136,16 +173,16 @@ async function loadExcelRows() {
   return rows;
 }
 
-async function loadRows() {
-  if (!fs.existsSync(DATA_FILE)) {
-    console.error(`❌ Data file "${DATA_FILE}" not found in project root.`);
+async function loadRows(mode, file) {
+  if (!fs.existsSync(file)) {
+    console.error(`❌ Data file "${file}" not found in project root.`);
     process.exit(1);
   }
 
-  const ext = path.extname(DATA_FILE).toLowerCase();
+  const ext = path.extname(file).toLowerCase();
   if (ext === '.csv') {
-    const rows = await loadCsvRows();
-    console.log(`  📄 CSV "${DATA_FILE}": ${rows.length} mailable rows loaded`);
+    const rows = mode === 'f25' ? await loadF25CsvRows(file) : await loadAllCsvRows(file);
+    console.log(`  📄 CSV "${file}" (mode ${mode}): ${rows.length} mailable rows loaded`);
     return rows;
   }
   return loadExcelRows();
@@ -166,6 +203,21 @@ async function main() {
   }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  /* ── Choose mode ── */
+  console.log('Which list to mail?');
+  console.log('  [1] F25 YC startups   (f25-emails.csv)');
+  console.log('  [2] All-emails list   (all-emails.csv)');
+  let mode = 'f25';
+  let dataFile = 'f25-emails.csv';
+  let progressFile = 'progress.f25.json';
+  const modeInput = (await ask(rl, 'Enter 1 or 2 (default 1): ')).trim();
+  if (modeInput === '2') {
+    mode = 'all';
+    dataFile = 'all-emails.csv';
+    progressFile = 'progress.all.json';
+  }
+  console.log(`\n✅ Mode: ${mode === 'f25' ? 'F25 (founder-tone, guide-aligned)' : 'all-emails (Hi there, description-anchored)'}\n`);
 
   /* ── Choose PDF ── */
   const pdfs = listPDFs();
@@ -204,12 +256,16 @@ async function main() {
   }
 
   /* ── Load rows ── */
-  const rows = await loadRows();
+  const rows = await loadRows(mode, dataFile);
   rows.forEach(r => { r._resumePath = resumePath; });
-  console.log(`📋 ${rows.length} rows loaded from ${DATA_FILE}\n`);
+  console.log(`📋 ${rows.length} rows loaded from ${dataFile}\n`);
 
-  /* ── Progress ── */
-  let progress = loadProgress(PROGRESS_FILE);
+  /* ── Progress (per-mode file; one-time migration from legacy progress.json for F25) ── */
+  if (mode === 'f25' && !fs.existsSync(progressFile) && fs.existsSync(PROGRESS_FILE)) {
+    fs.copyFileSync(PROGRESS_FILE, progressFile);
+    console.log(`  📦 Migrated legacy ${PROGRESS_FILE} → ${progressFile}`);
+  }
+  let progress = loadProgress(progressFile);
   let currentIndex = progress.lastIndex;
   let successfulSends = 0;
   const SUCCESS_TARGET = parseInt(process.env.DAILY_LIMIT, 10) || 10;
@@ -241,13 +297,13 @@ async function main() {
 
       currentIndex++;
       progress.lastIndex = currentIndex;
-      saveProgress(PROGRESS_FILE, progress);
+      saveProgress(progressFile, progress);
 
     } catch (err) {
       console.error(`❌ Failed for row ${currentIndex + 1}: ${err.message}`);
       currentIndex++;
       progress.lastIndex = currentIndex;
-      saveProgress(PROGRESS_FILE, progress);
+      saveProgress(progressFile, progress);
     }
   }
 

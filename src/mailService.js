@@ -37,22 +37,36 @@ const sendMail = async (row, resumeText) => {
 
   if (!email && !company && preEmails.length === 0) return null;
 
-  // CSV path: emails are already supplied; we have YC one-liner + description for context.
-  // Excel path: no emails, fall back to the scraper.
-  const hasContextAlready = !!(row.YCOneLiner || row.YCDescription);
-  const skipScrape = preEmails.length > 0 && hasContextAlready;
+  const mode = row._mode || 'f25';
 
-  const companyInfo = skipScrape
-    ? { emails: [], aboutText: '' }
-    : (company ? await findCompanyInfo(company, website, ycPage) : { emails: [], aboutText: '' });
+  // Mode 'all' (all-emails.csv): emails + Description are already in the row. No scrape.
+  // Mode 'f25': pre-resolved emails + YC context already; scrape only if missing.
+  // Mode 'xlsx-legacy' (no _mode set, scraper-driven): fall back to scraper.
+  let mergedContext = '';
+  let companyInfo = { emails: [], aboutText: '' };
 
-  // Merge YC one-liner + description + scraped about into a single context blob.
-  const ycContextParts = [row.YCOneLiner, row.YCDescription, companyInfo.aboutText]
-    .map(s => (s || '').trim())
-    .filter(Boolean);
-  const mergedContext = ycContextParts.join('\n\n');
+  if (mode === 'all') {
+    mergedContext = (row.Description || '').trim();
+  } else {
+    const hasContextAlready = !!(row.YCOneLiner || row.YCDescription);
+    const skipScrape = preEmails.length > 0 && hasContextAlready;
+    companyInfo = skipScrape
+      ? { emails: [], aboutText: '' }
+      : (company ? await findCompanyInfo(company, website, ycPage) : { emails: [], aboutText: '' });
+    const ycContextParts = [row.YCOneLiner, row.YCDescription, companyInfo.aboutText]
+      .map(s => (s || '').trim())
+      .filter(Boolean);
+    mergedContext = ycContextParts.join('\n\n');
+  }
 
-  const llmData = await prepareEmailContent(row, resumeText, mergedContext);
+  // FoundersNames is set by the F25 CSV loader; mode 'all' has no founder bios.
+  const foundersForPrompt = mode === 'all' ? '' : (row.FoundersNames || row.founders || '');
+  const llmData = await prepareEmailContent(row, resumeText, mergedContext, {
+    mode,
+    founders: foundersForPrompt,
+    competitors: row.competitors || '',
+    previousInstitutions: row['founders previous institutions'] || '',
+  });
   if (!llmData) {
     throw new Error('Failed to generate LLM content.');
   }

@@ -1,6 +1,6 @@
 const OpenAI = require('openai');
 const { loadTemplateText, loadUserInstructions } = require('./templateLoader');
-const { buildTemplatePrompt, detectPlaceholders, detectFakeExperience } = require('./promptBuilder');
+const { buildTemplatePrompt, detectPlaceholders, detectFakeExperience, detectBannedPhrases } = require('./promptBuilder');
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -74,7 +74,7 @@ async function getLLMResponse(messages) {
   return null;
 }
 
-async function prepareEmailContent(row, resumeText, companyContext = '') {
+async function prepareEmailContent(row, resumeText, companyContext = '', extra = {}) {
   const recruiterName = row.Name || 'team';
   const recruiterTitle = row.Title || 'Founding team';
   const company = row.Company || row['Company Name'] || 'your company';
@@ -92,6 +92,10 @@ async function prepareEmailContent(row, resumeText, companyContext = '') {
     recipient: { firstName, fullName: recruiterName, title: recruiterTitle },
     company,
     companyContext,
+    foundersText: extra.founders || '',
+    previousInstitutions: extra.previousInstitutions || '',
+    competitors: extra.competitors || '',
+    mode: extra.mode || 'f25',
   });
 
   const response = await getLLMResponse([
@@ -117,6 +121,15 @@ async function prepareEmailContent(row, resumeText, companyContext = '') {
   ];
   if (fakeExp.length) {
     console.warn(`  ⚠️ LLM hallucinated years of experience — skipping row. Found: ${fakeExp.join(', ')}`);
+    return null;
+  }
+
+  const banned = [
+    ...(detectBannedPhrases(response.body) || []),
+    ...(detectBannedPhrases(response.subject) || []),
+  ];
+  if (banned.length) {
+    console.warn(`  ⚠️ Banned filler phrase in LLM output — skipping row. Found: ${banned.join(', ')}`);
     return null;
   }
 
